@@ -87,7 +87,7 @@ class AccountManagerUI:
         self.settings_file = os.path.join(self.data_folder, "ui_settings.json")
         self.load_settings()
         
-        self.root.title("Roblox Account Manager - Made by evanovar")
+        self.root.title("Roblox Account Manager - Made by picklesauce")
         
         saved_pos = self.settings.get('main_window_position')
         if saved_pos:
@@ -368,7 +368,7 @@ class AccountManagerUI:
         action_frame = ttk.Frame(right_frame, style="Dark.TFrame")
         action_frame.pack(fill="x")
 
-        ttk.Button(action_frame, text="Donate", style="Dark.TButton", command=lambda: webbrowser.open("https://www.roblox.com/games/718090786/donation#!/store")).pack(fill="x", pady=2)
+        ttk.Button(action_frame, text="Donate", style="Dark.TButton", command=lambda: webbrowser.open("https://www.roblox.com/users/profile?username=hands001")).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Edit Note", style="Dark.TButton", command=self.edit_account_note).pack(fill="x", pady=2)
         ttk.Button(action_frame, text="Refresh List", style="Dark.TButton", command=self.refresh_accounts).pack(fill="x", pady=2)
 
@@ -987,7 +987,7 @@ class AccountManagerUI:
         try:
             print("[INFO] Checking for updates...")
             response = requests.get(
-                "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
+                "https://api.github.com/repos/picklesauce/RobloxAccountManager/releases/latest",
                 timeout=5
             )
             
@@ -1117,7 +1117,7 @@ class AccountManagerUI:
                 update_progress(0)
                 
                 response = requests.get(
-                    "https://api.github.com/repos/evanovar/RobloxAccountManager/releases/latest",
+                    "https://api.github.com/repos/picklesauce/RobloxAccountManager/releases/latest",
                     timeout=10
                 )
                 
@@ -1218,7 +1218,7 @@ del /f /q "%~f0"
         
         def manual_update():
             """Open GitHub releases page"""
-            webbrowser.open("https://github.com/evanovar/RobloxAccountManager/releases/latest")
+            webbrowser.open("https://github.com/picklesauce/RobloxAccountManager/releases/latest")
             update_window.destroy()
         
         auto_btn = ttk.Button(

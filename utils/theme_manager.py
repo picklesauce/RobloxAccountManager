@@ -15,7 +15,7 @@ class ThemeManager:
         "dark": {
             "metadata": {
                 "name": "Dark",
-                "author": "evanovar",
+                "author": "picklesauce",
                 "description": "Default dark theme with clean contrast",
             },
             "colors": {
@@ -33,7 +33,7 @@ class ThemeManager:
         "light": {
             "metadata": {
                 "name": "Light",
-                "author": "evanovar",
+                "author": "picklesauce",
                 "description": "Bright light theme with subtle contrast",
             },
             "colors": {
@@ -51,7 +51,7 @@ class ThemeManager:
         "dracula": {
             "metadata": {
                 "name": "Dracula",
-                "author": "evanovar",
+                "author": "picklesauce",
                 "description": "Classic Dracula-inspired cool dark palette",
             },
             "colors": {
@@ -71,7 +71,7 @@ class ThemeManager:
     DEFAULT_THEME = {
         "metadata": {
             "name": "Dark",
-            "author": "evanovar",
+            "author": "picklesauce",
             "description": "Default dark theme"
         },
         "colors": {
