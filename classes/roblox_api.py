@@ -22,7 +22,12 @@ class RobloxAPI:
     _rate_limiter_lock = threading.Lock()
     _last_request_time = None
     _min_interval = 6.0
-    
+
+    # Cached CSRF token per cookie. Refetching a token on every presence check
+    # hammered auth.roblox.com and was a major contributor to 429 rate limits,
+    # so reuse one per cookie and only refresh when missing or rejected (403).
+    _csrf_token_cache = {}
+
     @classmethod
     def _wait_for_rate_limit(cls):
         with cls._rate_limiter_lock:
@@ -235,16 +240,28 @@ class RobloxAPI:
         return None
     
     @staticmethod
-    def get_csrf_token(cookie):
-        """Get CSRF token for authenticated requests"""
+    def get_csrf_token(cookie, force_refresh=False):
+        """Get a CSRF token for authenticated requests, cached per cookie.
+
+        Pass force_refresh=True when a caller got a 403 (token rejected) so a
+        fresh one is fetched; otherwise the cached token is reused to avoid an
+        extra POST to auth.roblox.com on every call."""
+        if not force_refresh:
+            cached = RobloxAPI._csrf_token_cache.get(cookie)
+            if cached:
+                return cached
+
         url = "https://auth.roblox.com/v2/logout"
         headers = {
             'Cookie': f'.ROBLOSECURITY={cookie}'
         }
-        
+
         try:
             response = requests.post(url, headers=headers, timeout=5)
-            return response.headers.get('x-csrf-token')
+            token = response.headers.get('x-csrf-token')
+            if token:
+                RobloxAPI._csrf_token_cache[cookie] = token
+            return token
         except:
             return None
     
@@ -366,7 +383,15 @@ class RobloxAPI:
         
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=5)
-            
+
+            if response.status_code == 403:
+                # Cached CSRF token was rejected — refresh once and retry so the
+                # cache self-heals instead of failing the check.
+                fresh = RobloxAPI.get_csrf_token(cookie, force_refresh=True)
+                if fresh:
+                    headers['X-CSRF-TOKEN'] = fresh
+                    response = requests.post(url, headers=headers, json=payload, timeout=5)
+
             if response.status_code == 200:
                 data = response.json()
                 if data.get('userPresences') and len(data['userPresences']) > 0:
@@ -688,6 +713,13 @@ class RobloxAPI:
                 return True
             
             else:  # default
+                # Match the "client" path: remove RobloxPlayerInstaller.exe so the
+                # protocol-handler launch can't spawn it. Concurrent installer
+                # invocations during mass multi-instance launching collide and
+                # throw "Installer encountered a critical error"; with the installer
+                # exe gone that's impossible. Global filesystem state, so it also
+                # protects the profile-join dialog path (same protocol handler).
+                RobloxAPI.quarantine_installers()
                 os.startfile(url)
                 print("[SUCCESS] Roblox launched successfully!")
                 return True

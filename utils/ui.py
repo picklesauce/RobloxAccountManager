@@ -9893,7 +9893,7 @@ del /f /q "%~f0"
         )
 
         consecutive_failed_checks = 0
-        max_consecutive_fails = 2
+        max_consecutive_fails = 3
 
         if account in self.auto_rejoin_pids:
             print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
@@ -9941,6 +9941,15 @@ del /f /q "%~f0"
                         )
                     disconnect_detected = not in_game
                     
+                    # A presence *error* (None/429/exception) is not a confirmed
+                    # disconnect. If the tracked process is still alive, skip this
+                    # tick instead of killing a healthy instance over a bad read.
+                    if disconnect_detected and pres_err and self._check_roblox_process_exists(account):
+                        consecutive_failed_checks = 0
+                        if wait_next_check():
+                            break
+                        continue
+
                     if disconnect_detected:
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
@@ -9975,6 +9984,16 @@ del /f /q "%~f0"
                             else:
                                 disconnect_detected = True
                     else:
+                        # Presence came back None — a 429/rate-limit or transient
+                        # API error, NOT a confirmed disconnect. If the tracked
+                        # Roblox process is still alive it's almost certainly still
+                        # in-game, so don't kill it over an unknown reading.
+                        if self._check_roblox_process_exists(account):
+                            consecutive_failed_checks = 0
+                            disconnect_detected = False
+                            if wait_next_check():
+                                break
+                            continue
                         consecutive_failed_checks += 1
                         if consecutive_failed_checks < max_consecutive_fails:
                             disconnect_detected = False
