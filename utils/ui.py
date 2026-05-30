@@ -905,6 +905,7 @@ class AccountManagerUI:
                     "multi_roblox_method": "default",
                     "last_joined_user": "",
                     "auto_tile_windows": False,
+                    "auto_minimize_windows": False,
                     "selected_theme": "Dark",
                     "rejoin_webhook": {},
                     "websocket_enabled": False,
@@ -935,6 +936,7 @@ class AccountManagerUI:
                 "multi_roblox_method": "default",
                 "last_joined_user": "",
                 "auto_tile_windows": False,
+                "auto_minimize_windows": False,
                 "selected_theme": "Dark",
                 "rejoin_webhook": {},
                 "websocket_enabled": False,
@@ -2849,6 +2851,44 @@ del /f /q "%~f0"
         win32gui.EnumWindows(_cb, None)
         return hwnds
 
+    def _window_has_captcha_webview(self, hwnd):
+        """True if `hwnd` has a WebView2 child window — the signal that the
+        Roblox client is showing the "Verifying you're not a bot" security
+        screen. A normal in-game window (class WINDOWSCLIENT, title "Roblox")
+        has no child windows; the captcha embeds a WebView2 whose host window
+        is class WEBVIEW2BROWSERAPP."""
+        found = {'hit': False}
+
+        def _cb(child, _):
+            try:
+                buf = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetClassNameW(child, buf, 256)
+                if buf.value and buf.value.upper() == 'WEBVIEW2BROWSERAPP':
+                    found['hit'] = True
+                    return False  # stop enumerating
+            except Exception:
+                pass
+            return True
+
+        try:
+            proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(_cb)
+            ctypes.windll.user32.EnumChildWindows(hwnd, proc, 0)
+        except Exception:
+            pass
+        return found['hit']
+
+    def _account_window_has_captcha(self, account):
+        """True if the account's tracked Roblox window is showing the
+        verification captcha / security WebView2 screen."""
+        pid = self.auto_rejoin_pids.get(account)
+        if not pid:
+            return False
+        try:
+            hwnds = self._get_roblox_hwnds_from_pids({pid})
+        except Exception:
+            return False
+        return any(self._window_has_captcha_webview(hwnd) for hwnd in hwnds)
+
     def _get_active_instance_usernames(self):
         """Return a list of usernames that correspond to currently running Roblox instances.
 
@@ -2926,6 +2966,59 @@ del /f /q "%~f0"
                 time.sleep(6)
                 break
         self._tile_roblox_windows()
+
+    def _minimize_roblox_windows(self):
+        pids = self._get_roblox_pids()
+        if not pids:
+            return
+        hwnds = self._get_roblox_hwnds_from_pids(pids)
+        if not hwnds:
+            return
+        SW_MINIMIZE = 6
+        n = 0
+        for hwnd in hwnds:
+            try:
+                win32gui.ShowWindow(hwnd, SW_MINIMIZE)
+                n += 1
+            except Exception as e:
+                print(f"[ERROR] Could not minimize window {hwnd}: {e}")
+        print(f"[INFO] Minimized {n} Roblox window(s).")
+
+    def _minimize_roblox_windows_after_launch(self):
+        prev_count = len(self._get_roblox_pids())
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            time.sleep(3)
+            curr_count = len(self._get_roblox_pids())
+            if curr_count > prev_count:
+                time.sleep(6)
+                break
+        self._minimize_roblox_windows()
+
+    def _arrange_roblox_windows_after_start_all(self):
+        """After 'Start All' in auto-rejoin, wait for instances to settle, then
+        apply the user's window-arrangement preference (tile or minimize).
+
+        Start All may relaunch already-running accounts AND launch new ones, so
+        we wait for the Roblox process count to stop *changing* (rather than for
+        it to simply increase, as the after-launch helpers do)."""
+        deadline = time.time() + 40
+        last_count = -1
+        stable_ticks = 0
+        while time.time() < deadline:
+            time.sleep(2)
+            count = len(self._get_roblox_pids())
+            if count > 0 and count == last_count:
+                stable_ticks += 1
+                if stable_ticks >= 3:  # ~6s with no change → launches settled
+                    break
+            else:
+                stable_ticks = 0
+            last_count = count
+        if self.settings.get("auto_minimize_windows", False):
+            self._minimize_roblox_windows()
+        elif self.settings.get("auto_tile_windows", False):
+            self._tile_roblox_windows()
 
     def _save_cookie_status(self, username, is_valid):
         """Update cookie status in memory and persist to accounts file"""
@@ -4110,8 +4203,11 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1:
+                if self.settings.get("auto_minimize_windows", False):
+                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
+                elif self.settings.get("auto_tile_windows", False):
+                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -4187,8 +4283,11 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1:
+                if self.settings.get("auto_minimize_windows", False):
+                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
+                elif self.settings.get("auto_tile_windows", False):
+                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -4729,6 +4828,10 @@ del /f /q "%~f0"
 
             for account in accounts:
                 self.start_auto_rejoin_for_account(account)
+
+            if accounts and (self.settings.get("auto_minimize_windows", False)
+                             or self.settings.get("auto_tile_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_start_all, daemon=True).start()
 
             auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for all {len(accounts)} account(s)!")
@@ -6148,15 +6251,42 @@ del /f /q "%~f0"
         self.disable_launch_popup_check = disable_launch_popup_check
 
         auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
+        auto_minimize_windows_var = tk.BooleanVar(value=self.settings.get("auto_minimize_windows", False))
+
+        def on_auto_tile_toggle():
+            # Tiling and minimizing conflict — enabling one disables the other.
+            if auto_tile_windows_var.get():
+                auto_minimize_windows_var.set(False)
+                self.settings["auto_minimize_windows"] = False
+            self.settings["auto_tile_windows"] = auto_tile_windows_var.get()
+            self.save_settings()
+
+        def on_auto_minimize_toggle():
+            if auto_minimize_windows_var.get():
+                auto_tile_windows_var.set(False)
+                self.settings["auto_tile_windows"] = False
+            self.settings["auto_minimize_windows"] = auto_minimize_windows_var.get()
+            self.save_settings()
+
         auto_tile_check = ttk.Checkbutton(
             main_frame,
             text="Auto Tile Windows",
             variable=auto_tile_windows_var,
             style="Dark.TCheckbutton",
-            command=auto_save_setting("auto_tile_windows", auto_tile_windows_var)
+            command=on_auto_tile_toggle
         )
         auto_tile_check.pack(anchor="w", pady=2)
         self.auto_tile_check = auto_tile_check
+
+        auto_minimize_check = ttk.Checkbutton(
+            main_frame,
+            text="Auto Minimize Windows",
+            variable=auto_minimize_windows_var,
+            style="Dark.TCheckbutton",
+            command=on_auto_minimize_toggle
+        )
+        auto_minimize_check.pack(anchor="w", pady=2)
+        self.auto_minimize_check = auto_minimize_check
 
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
@@ -9987,7 +10117,9 @@ del /f /q "%~f0"
         )
 
         consecutive_failed_checks = 0
-        max_consecutive_fails = 3
+        max_consecutive_fails = 2
+        consecutive_captcha_checks = 0
+        max_consecutive_captcha = 1
 
         if account in self.auto_rejoin_pids:
             print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
@@ -10024,8 +10156,37 @@ del /f /q "%~f0"
                     check_presence = False
                 disconnect_detected = False
                 game_id = ''
+                captcha_forced = False
 
-                if check_presence:
+                # Captcha watchdog: Roblox sometimes keeps reporting presence
+                # in_game=true while showing a "Verifying you're not a bot"
+                # security screen (a WebView2 child window on the game window).
+                # The game is non-functional then, so treat it as a disconnect:
+                # kill the instance and let the rejoin path relaunch it fresh.
+                # Require it to persist across checks to avoid acting on a
+                # transient web overlay.
+                if self._account_window_has_captcha(account):
+                    consecutive_captcha_checks += 1
+                    if consecutive_captcha_checks >= max_consecutive_captcha:
+                        consecutive_captcha_checks = 0
+                        captcha_forced = True
+                        disconnect_detected = True
+                        print(f"[Auto-Rejoin] [{account}] Captcha/security screen detected — killing instance.")
+                        self._maybe_send_webhook_embed(
+                            "Auto Rejoin — Captcha Detected",
+                            f"**{account}** hit a verification captcha (presence still read in-game). Killing and relaunching.",
+                            0xE67E22
+                        )
+                    else:
+                        if wait_next_check():
+                            break
+                        continue
+                else:
+                    consecutive_captcha_checks = 0
+
+                if captcha_forced:
+                    pass
+                elif check_presence:
                     in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id, stop_event)
                     if pres_err:
                         self._maybe_send_webhook_embed(
