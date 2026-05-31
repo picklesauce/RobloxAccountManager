@@ -1,14 +1,14 @@
-[![Version](https://img.shields.io/github/v/release/evanovar/RobloxAccountManager)](https://github.com/evanovar/RobloxAccountManager/releases/latest)
-![License](https://img.shields.io/github/license/evanovar/RobloxAccountManager)
+[![Version](https://img.shields.io/github/v/release/picklesauce/RobloxAccountManager)](https://github.com/picklesauce/RobloxAccountManager/releases/latest)
+![License](https://img.shields.io/github/license/picklesauce/RobloxAccountManager)
 [![Discord](https://img.shields.io/discord/1436930121897476140?label=Discord)](https://discord.gg/TYnJXyEhgY)
-![DownloadCount](https://img.shields.io/github/downloads/evanovar/RobloxAccountManager/total)
+![DownloadCount](https://img.shields.io/github/downloads/picklesauce/RobloxAccountManager/total)
 [![Website](https://img.shields.io/badge/website-online-1F58FF
-)](https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram/homepage)<br>
-[![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/evanovar/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
+)](https://picklesauces-roblox-account-manager.gitbook.io/picklesauces-ram/homepage)<br>
+[![Download](https://img.shields.io/badge/Download-280ab?style=for-the-badge)](https://github.com/picklesauce/RobloxAccountManager/releases/latest/download/RobloxAccountManager.exe)
 
 > [!IMPORTANT]
 > Before you see this as a **"Virus"** or **"Unofficial,"** please read:
-> - **Project Status:** This is the current active version of the Evanovar's Roblox Account Manager. While the original C# tool by **ic3w0lf22** is a classic, it has been discontinued. I (evanovar) have built this in Python to keep the project alive and updated.<br><br>
+> - **Project Status:** This is the current active version of picklesauce's Roblox Account Manager. While the original C# tool by **ic3w0lf22** is a classic, it has been discontinued. I (picklesauce) have built this in Python to keep the project alive and updated.<br><br>
 > - **100% Open Source:** Every line of code is transparent and available for everyone. If you don't trust the .exe, you are encouraged to run the script directly from the source code.<br><br>
 > - **Integrity:** The standalone .exe in the releases is compiled directly from this code with zero alterations.
 
@@ -16,10 +16,10 @@
 
 A powerful tool for managing multiple Roblox accounts with secure cookie extraction and modern UI interface.
 
-**Created by evanovar** · **Get Help:** [Discord Server](https://discord.gg/TYnJXyEhgY)<br>
+**Created by picklesauce** · **Get Help:** [Discord Server](https://discord.gg/TYnJXyEhgY)<br>
 
 ⭐ If you like this project, please consider starring the repository! ⭐<br>
-Or support the creator by donating via [Robux](https://www.roblox.com/games/718090786/donation#store) ♥️
+Or support the creator by donating on Roblox: [hands001](https://www.roblox.com/users/profile?username=hands001) ♥️
 
 <img width="447" height="544" alt="image" src="https://github.com/user-attachments/assets/7296d21f-4026-486b-a9fd-ea75515be930" />
 <img width="295" height="412" alt="image" src="https://github.com/user-attachments/assets/7a5acb0d-3b65-470e-ac90-7d022570df5b" />
@@ -42,7 +42,7 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 
 **Quick & Easy - No Python Required!**
 
-1. Go to [Releases](https://github.com/evanovar/RobloxAccountManager/releases)
+1. Go to [Releases](https://github.com/picklesauce/RobloxAccountManager/releases)
 2. Download `RobloxAccountManager.exe` from the latest release
 3. Put it in a folder
 4. Double-click to run - that's it!
@@ -66,7 +66,7 @@ Or support the creator by donating via [Robux](https://www.roblox.com/games/7180
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/evanovar/RobloxAccountManager
+   git clone https://github.com/picklesauce/RobloxAccountManager
    cd RobloxAccountManager
    ```
 
@@ -99,8 +99,8 @@ This tool is for educational purposes only. Users are responsible for complying 
 
 ### Team Roles
 
-- Committers and reviewers: [evanovar](https://github.com/evanovar)
-- Approvers: [evanovar](https://github.com/evanovar)
+- Committers and reviewers: [picklesauce](https://github.com/picklesauce)
+- Approvers: [picklesauce](https://github.com/picklesauce)
 
 ## Privacy Policy
 

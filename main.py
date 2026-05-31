@@ -28,7 +28,7 @@ def setup_icon(data_folder):
     
     try:
         print("[INFO] Downloading application icon...")
-        icon_url = "https://raw.githubusercontent.com/evanovar/RobloxAccountManager/main/icon.ico"
+        icon_url = "https://raw.githubusercontent.com/picklesauce/RobloxAccountManager/main/icon.ico"
         response = requests.get(icon_url, timeout=5)
         
         if response.status_code == 200:
