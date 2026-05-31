@@ -157,7 +157,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Cookie Validity Indicator** | Warning icon next to accounts with expired or invalid cookies | Automatically shown in the account list |
 | **Account Notes** | Add custom notes/tags to accounts for organization | Right-click account → "Edit Note" |
 | **Account Deletion** | Remove accounts from your saved list | Right-click account → "Delete" → confirm |
-| **Multi-Select Mode** | Select and manage multiple accounts at once | Enable in Settings → Use Ctrl+Click to select multiple |
+| **Multi-Select Mode** | Select and manage multiple accounts at once | Enable in Settings → QOL tab → "Multi Select"; use Ctrl+Click to select multiple |
 | **Drag & Drop Reordering** | Reorder accounts by dragging and dropping in the list | Click & hold account for 0.5s, then drag to new position |
 | **Keyboard Shortcuts** | Delete selected accounts with the Delete key | Select account(s) → press Delete |
 
@@ -167,7 +167,10 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | :--- | :--- | :--- |
 | **Single Game Launch** | Launch Roblox game with one account | Enter Place ID → Click "Join Place" |
 | **Multi-Account Launch** | Launch the same game with multiple accounts simultaneously | Enable Multi-Select → Select accounts → Enter Place ID → Click "Join Place" |
-| **Auto Window Tiling** | Automatically arranges Roblox windows in a tiled grid when launching multiple instances | Automatic when launching 2+ accounts simultaneously |
+| **Auto Window Tiling** | Automatically arranges Roblox windows in a tiled grid when launching multiple instances | Enable in Settings → QOL tab → "Auto Tile Windows"; applies automatically when launching 2+ accounts |
+| **Auto Minimize Windows** | Automatically minimizes Roblox windows after launching multiple instances; can be combined with Auto Tile (windows are tiled first, then minimized) | Enable in Settings → QOL tab → "Auto Minimize Windows" |
+| **Manual Tile / Minimize** | Tile or minimize all currently-open Roblox windows on demand | Settings → QOL tab → "Tile Windows" / "Minimize Windows" buttons |
+| **Confirm Before Launch** | Show a confirmation prompt before launching a game | Settings → QOL tab → "Confirm Before Launch" |
 | **Private Server Support** | Save and launch private servers (marked with [P]) | Enter Private Server ID → Game automatically joins private server |
 | **VIP Link Parsing** | Paste a full Roblox VIP URL into the Private Server field to auto-extract Place ID and server code | Paste VIP URL into "Private Server" field |
 | **Join User** | Join a specific user's current game; last-used account saved across sessions | Select account → "Join Place" dropdown → "Join User" → enter username |
@@ -176,7 +179,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Favorite Games** | Save and quickly launch favorite games with optional notes | Click ⭐ next to Recent Games → add favorites |
 | **Game List (Recently Played)** | Auto-save recently played games for quick access | Games auto-save on launch (configurable 5-50 games) |
 | **Game Name Lookup** | Auto-fetch and display game names from Place IDs | Automatic when Place ID changes |
-| **Launch Popup Disable** | Disable success notification popups | Settings → General tab → "Disable Launch Popups" |
+| **Launch Popup Disable** | Disable success notification popups | Settings → QOL tab → "Disable Launch Success Popup" |
 | **Roblox Launcher Selection** | Choose your preferred Roblox launcher | Settings → Roblox tab → select Default, Bloxstrap, Fishstrap, Froststrap, or Roblox Client |
 | **Launch Roblox Home (App / Browser)** | Dropdown on the homepage: launch the Roblox client to home, or open a detached Chrome to roblox.com/home logged in as the selected account | Click "Launch Roblox Home  ▼" → pick **Launch in App** or **Launch in Browser** |
 
@@ -236,7 +239,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Color Customization** | 5 color pickers: Background Dark/Mid/Light, Text, Accent | Settings → Theme tab → click color picker icons |
 | **Font Selection** | Choose from 7 preset fonts (Segoe UI, Arial, Calibri, etc.) | Settings → Theme tab → font dropdown |
 | **Font Size Adjustment** | Adjust font size (8–16px) | Settings → Theme tab → size controls |
-| **Always on Top** | Keep the window above all other windows | Settings → General tab → "Always on Top" |
+| **Always on Top** | Keep the window above all other windows | Settings → QOL tab → "Enable Topmost" |
 | **Discord Quick Link** | Project Discord invite link (no in-app button) | Visit the Discord server link in the About tab or README |
 
 ### Encryption & Data Security

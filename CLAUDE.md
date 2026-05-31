@@ -135,6 +135,40 @@ Set in settings as `roblox_launcher`. Options: `default`, `bloxstrap`, `fishstra
 `froststrap`, `voidstrap`, `client`, `custom`. Handled entirely in
 `RobloxAPI._execute_launch` — all launch code paths end here.
 
+## Settings window & window arrangement
+
+`open_settings` (in `utils/ui.py`) builds a 7-tab notebook, in order:
+`General | Themes | Roblox | Tool | Discord | Developer | QOL`.
+
+The **QOL** tab holds quality-of-life toggles plus the window-arrangement
+controls (relocated out of General):
+
+- `auto_tile_windows` / `auto_minimize_windows` — **independent** booleans (not
+  mutually exclusive). On a multi-account launch both may be on; the order is
+  always **tile, then minimize** so that restoring a minimized window later
+  reveals it in its tiled slot.
+- Manual **Tile Windows** / **Minimize Windows** buttons act on currently-open
+  Roblox windows immediately — each runs `_tile_roblox_windows` /
+  `_minimize_roblox_windows` in a daemon thread, and silently no-ops when no
+  Roblox windows are open.
+- Convenience toggles: `enable_topmost`, `confirm_before_launch`, multi-select
+  (Ctrl+Click), `disable_launch_popup`.
+
+Window-arrangement helpers (all in `utils/ui.py`):
+
+- `_apply_window_arrangement` — single source of truth; applies whichever prefs
+  are enabled in tile→minimize order.
+- `_arrange_roblox_windows_after_launch` — waits for the new Roblox process(es)
+  to appear (~6 s settle), then calls `_apply_window_arrangement`. Spawned as a
+  daemon thread from `launch_home` / `launch_game` whenever 2+ accounts launch
+  and either toggle is set.
+- `_arrange_roblox_windows_after_start_all` — same idea after the auto-rejoin
+  "Start All", also ending in `_apply_window_arrangement`.
+
+(Replaces the older `_tile_roblox_windows_after_launch` /
+`_minimize_roblox_windows_after_launch` pair and the previous "minimize *or*
+tile" mutually-exclusive logic.)
+
 ## Encryption
 
 Three modes selected at first run: Hardware (tied to machine), Password (portable),
