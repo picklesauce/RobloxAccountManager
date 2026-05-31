@@ -581,7 +581,38 @@ class RobloxAPI:
         print(f"[INFO] Launcher: {launcher_preference}")
 
         return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
-    
+
+    @staticmethod
+    def launch_roblox_follow_user(username, cookie, friend_user_id, launcher_preference="default", custom_launcher_path=""):
+        """Launch Roblox and follow a friend into their current game via the
+        RequestFollowUser PlaceLauncher request — the app-path equivalent of
+        clicking Join on the friend's profile (no browser involved)."""
+        print(f"[INFO] Getting authentication ticket for {username}...")
+        auth_ticket = RobloxAPI.get_auth_ticket(cookie)
+        if not auth_ticket:
+            print("[ERROR] Failed to get authentication ticket")
+            return False
+
+        print("[SUCCESS] Got authentication ticket!")
+
+        browser_tracker_id = random.randint(55393295400, 55393295500)
+        launch_time = int(time.time() * 1000)
+
+        url = (
+            "roblox-player:1+launchmode:play+gameinfo:" + auth_ticket +
+            "+launchtime:" + str(launch_time) +
+            "+placelauncherurl:https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestFollowUser" +
+            "&browserTrackerId=" + str(browser_tracker_id) +
+            "&userId=" + str(friend_user_id) +
+            "+browsertrackerid:" + str(browser_tracker_id) +
+            "+robloxLocale:en_us+gameLocale:en_us"
+        )
+
+        print(f"[INFO] Launching Roblox for {username} (following user {friend_user_id})...")
+        print(f"[INFO] Launcher: {launcher_preference}")
+
+        return RobloxAPI._execute_launch(url, launcher_preference, custom_launcher_path)
+
     @staticmethod
     def _execute_launch(url, launcher_preference, custom_launcher_path=""):
         """Execute the Roblox launch with the specified launcher"""

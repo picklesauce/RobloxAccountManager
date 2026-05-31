@@ -750,7 +750,26 @@ class RobloxAccountManager:
             job_id,
             custom_launcher_path,
         )
-    
+
+    def launch_roblox_follow_user(self, username, friend_username, launcher_preference="default", custom_launcher_path=""):
+        """App-path join-off: open RobloxPlayerBeta and follow `friend_username`
+        into their current game via RequestFollowUser — no browser, no mouse."""
+        if username not in self.accounts:
+            print(f"[Follow Join] Account '{username}' not found")
+            return False
+
+        cookie = self.accounts[username]['cookie']
+
+        friend_user_id = RobloxAPI.get_user_id_from_username(friend_username)
+        if not friend_user_id:
+            print(f"[Follow Join] [{username}] Could not resolve friend username '{friend_username}' to a user ID")
+            return False
+
+        print(f"[Follow Join] [{username}] Following {friend_username} (uid {friend_user_id}) into their game via app")
+        return RobloxAPI.launch_roblox_follow_user(
+            username, cookie, friend_user_id, launcher_preference, custom_launcher_path
+        )
+
     def open_authenticated_browser(self, username, url):
         """Open a detached Chrome window logged in as `username`, navigated to
         `url`, and leave it running. Chrome stays alive after this returns.
@@ -824,6 +843,29 @@ class RobloxAccountManager:
                 pass
             return False
 
+    def _click_uia_button_preserving_cursor(self, button):
+        """Click a UIA button (Chrome's canvas-drawn protocol-dialog buttons
+        need real input, so we use click_input) WITHOUT leaving the user's
+        physical mouse parked on the dialog: snapshot the cursor position first,
+        then restore it immediately after the click so the pointer snaps back to
+        where the user had it instead of being hijacked."""
+        import ctypes
+        from ctypes import wintypes
+        pt = wintypes.POINT()
+        have_pos = False
+        try:
+            have_pos = bool(ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)))
+        except Exception:
+            have_pos = False
+        try:
+            button.click_input()
+        finally:
+            if have_pos:
+                try:
+                    ctypes.windll.user32.SetCursorPos(int(pt.x), int(pt.y))
+                except Exception:
+                    pass
+
     def _try_click_chrome_protocol_dialog(self, username):
         """One-shot scan for Chrome's external-protocol confirmation dialog
         ("Open Roblox Game Client?"). If found, click the 'Open ...' button
@@ -878,7 +920,7 @@ class RobloxAccountManager:
                         if any(x in lname for x in (" tab", " window", " menu", " bookmark", " file", " link in")):
                             continue
                         print(f"[Browser Join] [{username}] Clicking Chrome protocol dialog button: {name!r}")
-                        b.click_input()
+                        self._click_uia_button_preserving_cursor(b)
                         return True
                 except Exception as e:
                     print(f"[Browser Join] [{username}] Error clicking protocol dialog: {e}")

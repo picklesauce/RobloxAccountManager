@@ -906,6 +906,7 @@ class AccountManagerUI:
                     "last_joined_user": "",
                     "auto_tile_windows": False,
                     "auto_minimize_windows": False,
+                    "join_off_use_app": True,
                     "selected_theme": "Dark",
                     "rejoin_webhook": {},
                     "websocket_enabled": False,
@@ -937,6 +938,7 @@ class AccountManagerUI:
                 "last_joined_user": "",
                 "auto_tile_windows": False,
                 "auto_minimize_windows": False,
+                "join_off_use_app": True,
                 "selected_theme": "Dark",
                 "rejoin_webhook": {},
                 "websocket_enabled": False,
@@ -6288,6 +6290,17 @@ del /f /q "%~f0"
         auto_minimize_check.pack(anchor="w", pady=2)
         self.auto_minimize_check = auto_minimize_check
 
+        join_off_use_app_var = tk.BooleanVar(value=self.settings.get("join_off_use_app", True))
+        join_off_use_app_check = ttk.Checkbutton(
+            main_frame,
+            text="Join-Off via App (follow friend, no browser)",
+            variable=join_off_use_app_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("join_off_use_app", join_off_use_app_var)
+        )
+        join_off_use_app_check.pack(anchor="w", pady=2)
+        self.join_off_use_app_check = join_off_use_app_check
+
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
             start_menu = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
@@ -10396,9 +10409,17 @@ del /f /q "%~f0"
                 if not self._is_account_currently_in_game(join_off):
                     print(f"[Auto-Rejoin] [{account}] Waiting for {join_off} to be in-game before joining off them")
                     return None
-                success = self.manager.launch_roblox_profile_join(
-                    account, join_off, launcher_pref, custom_launcher_path
-                )
+                if self.settings.get("join_off_use_app", True):
+                    # App path: open RobloxPlayerBeta and follow the friend in
+                    # (RequestFollowUser) — no browser, no mouse takeover.
+                    success = self.manager.launch_roblox_follow_user(
+                        account, join_off, launcher_pref, custom_launcher_path
+                    )
+                else:
+                    # Browser path: navigate to the friend's profile and click Join.
+                    success = self.manager.launch_roblox_profile_join(
+                        account, join_off, launcher_pref, custom_launcher_path
+                    )
             else:
                 success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
             
