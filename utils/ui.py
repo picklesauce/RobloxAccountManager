@@ -2958,17 +2958,6 @@ del /f /q "%~f0"
         except Exception as e:
             print(f"[ERROR] Error tiling windows: {e}")
 
-    def _tile_roblox_windows_after_launch(self):
-        prev_count = len(self._get_roblox_pids())
-        deadline = time.time() + 45
-        while time.time() < deadline:
-            time.sleep(3)
-            curr_count = len(self._get_roblox_pids())
-            if curr_count > prev_count:
-                time.sleep(6)
-                break
-        self._tile_roblox_windows()
-
     def _minimize_roblox_windows(self):
         pids = self._get_roblox_pids()
         if not pids:
@@ -2986,7 +2975,17 @@ del /f /q "%~f0"
                 print(f"[ERROR] Could not minimize window {hwnd}: {e}")
         print(f"[INFO] Minimized {n} Roblox window(s).")
 
-    def _minimize_roblox_windows_after_launch(self):
+    def _apply_window_arrangement(self):
+        """Apply enabled window-arrangement preferences in order: tile first,
+        then minimize (so restoring a window later reveals its tiled slot)."""
+        if self.settings.get("auto_tile_windows", False):
+            self._tile_roblox_windows()
+        if self.settings.get("auto_minimize_windows", False):
+            self._minimize_roblox_windows()
+
+    def _arrange_roblox_windows_after_launch(self):
+        """Wait for newly-launched Roblox instance(s) to appear, then apply the
+        enabled window-arrangement preference(s)."""
         prev_count = len(self._get_roblox_pids())
         deadline = time.time() + 45
         while time.time() < deadline:
@@ -2995,7 +2994,7 @@ del /f /q "%~f0"
             if curr_count > prev_count:
                 time.sleep(6)
                 break
-        self._minimize_roblox_windows()
+        self._apply_window_arrangement()
 
     def _arrange_roblox_windows_after_start_all(self):
         """After 'Start All' in auto-rejoin, wait for instances to settle, then
@@ -3017,10 +3016,7 @@ del /f /q "%~f0"
             else:
                 stable_ticks = 0
             last_count = count
-        if self.settings.get("auto_minimize_windows", False):
-            self._minimize_roblox_windows()
-        elif self.settings.get("auto_tile_windows", False):
-            self._tile_roblox_windows()
+        self._apply_window_arrangement()
 
     def _save_cookie_status(self, username, is_valid):
         """Update cookie status in memory and persist to accounts file"""
@@ -4205,11 +4201,9 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
-            if success_count > 1:
-                if self.settings.get("auto_minimize_windows", False):
-                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
-                elif self.settings.get("auto_tile_windows", False):
-                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1 and (self.settings.get("auto_tile_windows", False)
+                                      or self.settings.get("auto_minimize_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -4285,11 +4279,9 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
-            if success_count > 1:
-                if self.settings.get("auto_minimize_windows", False):
-                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
-                elif self.settings.get("auto_tile_windows", False):
-                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1 and (self.settings.get("auto_tile_windows", False)
+                                      or self.settings.get("auto_minimize_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -5879,7 +5871,7 @@ del /f /q "%~f0"
         
         self.root.update_idletasks()
         
-        settings_width = 330
+        settings_width = 400
         settings_height = 470
         
         saved_pos = self.settings.get('settings_window_position')
@@ -5916,7 +5908,10 @@ del /f /q "%~f0"
         
         developer_tab = ttk.Frame(tabs, style="Dark.TFrame")
         tabs.add(developer_tab, text="Developer")
-        
+
+        qol_tab = ttk.Frame(tabs, style="Dark.TFrame")
+        tabs.add(qol_tab, text="QOL")
+
         dev_frame = ttk.Frame(developer_tab, style="Dark.TFrame")
         dev_frame.pack(fill="both", expand=True, padx=20, pady=15)
 
@@ -6179,16 +6174,6 @@ del /f /q "%~f0"
                 self.account_list.config(selectmode=tk.SINGLE)
             self.save_settings()
         
-        topmost_check = ttk.Checkbutton(
-            main_frame,
-            text="Enable Topmost",
-            variable=topmost_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("enable_topmost", topmost_var)
-        )
-        topmost_check.pack(anchor="w", pady=2)
-        self.topmost_check = topmost_check
-
         multi_roblox_frame = ttk.Frame(main_frame, style="Dark.TFrame")
         multi_roblox_frame.pack(anchor="w", fill="x", pady=2)
 
@@ -6220,75 +6205,6 @@ del /f /q "%~f0"
         )
         settings_btn.pack(side="right", padx=(5, 0))
         self.settings_btn = settings_btn
-
-        confirm_check = ttk.Checkbutton(
-            main_frame,
-            text="Confirm Before Launch",
-            variable=confirm_launch_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("confirm_before_launch", confirm_launch_var)
-        )
-        confirm_check.pack(anchor="w", pady=2)
-        self.confirm_check = confirm_check
-
-        multi_select_check = ttk.Checkbutton(
-            main_frame,
-            text="Multi Select (Ctrl + Click)",
-            variable=multi_select_var,
-            style="Dark.TCheckbutton",
-            command=on_multi_select_toggle
-        )
-        multi_select_check.pack(anchor="w", pady=2)
-        self.multi_select_check = multi_select_check
-
-        disable_launch_popup_var = tk.BooleanVar(value=self.settings.get("disable_launch_popup", False))
-        disable_launch_popup_check = ttk.Checkbutton(
-            main_frame,
-            text="Disable Launch Success Popup",
-            variable=disable_launch_popup_var,
-            style="Dark.TCheckbutton",
-            command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
-        )
-        disable_launch_popup_check.pack(anchor="w", pady=2)
-        self.disable_launch_popup_check = disable_launch_popup_check
-
-        auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
-        auto_minimize_windows_var = tk.BooleanVar(value=self.settings.get("auto_minimize_windows", False))
-
-        def on_auto_tile_toggle():
-            # Tiling and minimizing conflict — enabling one disables the other.
-            if auto_tile_windows_var.get():
-                auto_minimize_windows_var.set(False)
-                self.settings["auto_minimize_windows"] = False
-            self.settings["auto_tile_windows"] = auto_tile_windows_var.get()
-            self.save_settings()
-
-        def on_auto_minimize_toggle():
-            if auto_minimize_windows_var.get():
-                auto_tile_windows_var.set(False)
-                self.settings["auto_tile_windows"] = False
-            self.settings["auto_minimize_windows"] = auto_minimize_windows_var.get()
-            self.save_settings()
-
-        auto_tile_check = ttk.Checkbutton(
-            main_frame,
-            text="Auto Tile Windows",
-            variable=auto_tile_windows_var,
-            style="Dark.TCheckbutton",
-            command=on_auto_tile_toggle
-        )
-        auto_tile_check.pack(anchor="w", pady=2)
-        self.auto_tile_check = auto_tile_check
-
-        auto_minimize_check = ttk.Checkbutton(
-            main_frame,
-            text="Auto Minimize Windows",
-            variable=auto_minimize_windows_var,
-            style="Dark.TCheckbutton",
-            command=on_auto_minimize_toggle
-        )
-        auto_minimize_check.pack(anchor="w", pady=2)
-        self.auto_minimize_check = auto_minimize_check
 
         join_off_use_app_var = tk.BooleanVar(value=self.settings.get("join_off_use_app", True))
         join_off_use_app_check = ttk.Checkbutton(
@@ -6421,7 +6337,134 @@ del /f /q "%~f0"
             font=("Segoe UI", 9)
         )
         version_label.pack(anchor="e", pady=(6, 0))
-        
+
+        # ── QOL tab ───────────────────────────────────────────────────────
+        qol_frame = ttk.Frame(qol_tab, style="Dark.TFrame")
+        qol_frame.pack(fill="both", expand=True, padx=20, pady=15)
+
+        ttk.Label(
+            qol_frame,
+            text="Window Arrangement",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 10, "bold")
+        ).pack(anchor="w", pady=(0, 2))
+
+        auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
+        auto_minimize_windows_var = tk.BooleanVar(value=self.settings.get("auto_minimize_windows", False))
+
+        def on_auto_tile_toggle():
+            # Independent of auto-minimize; both may be enabled (tile then minimize on launch).
+            self.settings["auto_tile_windows"] = auto_tile_windows_var.get()
+            self.save_settings()
+
+        def on_auto_minimize_toggle():
+            self.settings["auto_minimize_windows"] = auto_minimize_windows_var.get()
+            self.save_settings()
+
+        auto_tile_check = ttk.Checkbutton(
+            qol_frame,
+            text="Auto Tile Windows (on launch)",
+            variable=auto_tile_windows_var,
+            style="Dark.TCheckbutton",
+            command=on_auto_tile_toggle
+        )
+        auto_tile_check.pack(anchor="w", pady=2)
+        self.auto_tile_check = auto_tile_check
+
+        auto_minimize_check = ttk.Checkbutton(
+            qol_frame,
+            text="Auto Minimize Windows (on launch)",
+            variable=auto_minimize_windows_var,
+            style="Dark.TCheckbutton",
+            command=on_auto_minimize_toggle
+        )
+        auto_minimize_check.pack(anchor="w", pady=2)
+        self.auto_minimize_check = auto_minimize_check
+
+        def _qol_tile_now():
+            threading.Thread(target=self._tile_roblox_windows, daemon=True).start()
+
+        def _qol_minimize_now():
+            threading.Thread(target=self._minimize_roblox_windows, daemon=True).start()
+
+        apply_now_frame = ttk.Frame(qol_frame, style="Dark.TFrame")
+        apply_now_frame.pack(fill="x", pady=(4, 2))
+
+        ttk.Label(
+            apply_now_frame,
+            text="Apply now:",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 9)
+        ).pack(side="left")
+
+        tile_now_btn = ttk.Button(
+            apply_now_frame,
+            text="Tile Windows",
+            style="Dark.TButton",
+            command=_qol_tile_now
+        )
+        tile_now_btn.pack(side="left", padx=(8, 4))
+
+        minimize_now_btn = ttk.Button(
+            apply_now_frame,
+            text="Minimize Windows",
+            style="Dark.TButton",
+            command=_qol_minimize_now
+        )
+        minimize_now_btn.pack(side="left")
+
+        qol_sep = ttk.Frame(qol_frame, style="Dark.TFrame", height=1)
+        qol_sep.pack(fill="x", pady=(10, 8))
+        qol_sep.configure(relief="solid", borderwidth=1)
+
+        ttk.Label(
+            qol_frame,
+            text="Convenience",
+            style="Dark.TLabel",
+            font=(self.FONT_FAMILY, 10, "bold")
+        ).pack(anchor="w", pady=(0, 2))
+
+        topmost_check = ttk.Checkbutton(
+            qol_frame,
+            text="Enable Topmost",
+            variable=topmost_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("enable_topmost", topmost_var)
+        )
+        topmost_check.pack(anchor="w", pady=2)
+        self.topmost_check = topmost_check
+
+        confirm_check = ttk.Checkbutton(
+            qol_frame,
+            text="Confirm Before Launch",
+            variable=confirm_launch_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("confirm_before_launch", confirm_launch_var)
+        )
+        confirm_check.pack(anchor="w", pady=2)
+        self.confirm_check = confirm_check
+
+        multi_select_check = ttk.Checkbutton(
+            qol_frame,
+            text="Multi Select (Ctrl + Click)",
+            variable=multi_select_var,
+            style="Dark.TCheckbutton",
+            command=on_multi_select_toggle
+        )
+        multi_select_check.pack(anchor="w", pady=2)
+        self.multi_select_check = multi_select_check
+
+        disable_launch_popup_var = tk.BooleanVar(value=self.settings.get("disable_launch_popup", False))
+        disable_launch_popup_check = ttk.Checkbutton(
+            qol_frame,
+            text="Disable Launch Success Popup",
+            variable=disable_launch_popup_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("disable_launch_popup", disable_launch_popup_var)
+        )
+        disable_launch_popup_check.pack(anchor="w", pady=2)
+        self.disable_launch_popup_check = disable_launch_popup_check
+
         roblox_frame = ttk.Frame(roblox_tab, style="Dark.TFrame")
         roblox_frame.pack(fill="both", expand=True, padx=20, pady=15)
         
