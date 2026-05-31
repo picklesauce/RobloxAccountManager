@@ -898,12 +898,15 @@ class AccountManagerUI:
                     "anti_afk_interval_minutes": 10,
                     "anti_afk_press_time_seconds": 1,
                     "anti_afk_key": "w",
+                    "anti_afk_tooltip_enabled": True,
                     "optimize_roblox_ram": False,
                     "disable_launch_popup": False,
                     "auto_rejoin_configs": {},
                     "multi_roblox_method": "default",
                     "last_joined_user": "",
                     "auto_tile_windows": False,
+                    "auto_minimize_windows": False,
+                    "join_off_use_app": True,
                     "selected_theme": "Dark",
                     "rejoin_webhook": {},
                     "websocket_enabled": False,
@@ -927,12 +930,15 @@ class AccountManagerUI:
                 "anti_afk_interval_minutes": 10,
                 "anti_afk_press_time_seconds": 1,
                 "anti_afk_key": "w",
+                "anti_afk_tooltip_enabled": True,
                 "optimize_roblox_ram": False,
                 "auto_rejoin_configs": {},
                 "disable_launch_popup": False,
                 "multi_roblox_method": "default",
                 "last_joined_user": "",
                 "auto_tile_windows": False,
+                "auto_minimize_windows": False,
+                "join_off_use_app": True,
                 "selected_theme": "Dark",
                 "rejoin_webhook": {},
                 "websocket_enabled": False,
@@ -948,6 +954,9 @@ class AccountManagerUI:
             settings_migrated = True
         if "anti_afk_press_time_seconds" not in self.settings:
             self.settings["anti_afk_press_time_seconds"] = self.settings.get("anti_afk_key_amount", 1)
+            settings_migrated = True
+        if "anti_afk_tooltip_enabled" not in self.settings:
+            self.settings["anti_afk_tooltip_enabled"] = True
             settings_migrated = True
         if "optimize_roblox_ram" not in self.settings:
             self.settings["optimize_roblox_ram"] = False
@@ -1831,13 +1840,74 @@ del /f /q "%~f0"
             if action == "autorejoin":
                 return self._websocket_command_auto_rejoin(parts)
 
+            if action == "add":
+                return self._websocket_command_add(command_text)
+
             return {
                 "ok": False,
                 "error": "Unknown command",
-                "supported": ["Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
+                "supported": ["Add", "Launch", "JoinUser", "GetStatus", "Ping", "AutoRejoin"],
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _websocket_parse_cookie_payloads(self, payload):
+        text = str(payload or "").strip()
+        if not text:
+            return []
+
+        if "_|WARNING:-" in text:
+            parts = text.split("_|WARNING:-")
+            return ["_|WARNING:-" + part.strip() for part in parts if part.strip()]
+
+        return [chunk.strip() for chunk in re.split(r"\s+", text) if chunk.strip()]
+
+    def _websocket_command_add(self, command_text):
+        payload = str(command_text or "").strip()
+        if len(payload) <= 3:
+            return {"ok": False, "error": "Usage: Add <cookie> [cookie2 ...]"}
+
+        cookie_payload = payload[3:].strip()
+        cookies = self._websocket_parse_cookie_payloads(cookie_payload)
+        if not cookies:
+            return {"ok": False, "error": "No cookies provided"}
+
+        imported = []
+        failed = []
+
+        for cookie in cookies:
+            try:
+                success, username = self.manager.import_cookie_account(cookie)
+                if success and username:
+                    imported.append(username)
+                else:
+                    failed.append({"cookie": cookie, "error": "Import failed"})
+            except Exception as exc:
+                failed.append({"cookie": cookie, "error": str(exc)})
+
+        if imported:
+            try:
+                self._run_on_ui_thread(self.refresh_accounts, wait=False)
+            except Exception:
+                pass
+
+        if not imported:
+            return {
+                "ok": False,
+                "error": "Failed to import any accounts",
+                "failed": failed,
+            }
+
+        return {
+            "ok": True,
+            "result": {
+                "action": "Add",
+                "imported": imported,
+                "imported_count": len(imported),
+                "failed_count": len(failed),
+            },
+            "failed": failed,
+        }
 
     def _websocket_command_launch(self, parts):
         if len(parts) < 3:
@@ -2783,6 +2853,44 @@ del /f /q "%~f0"
         win32gui.EnumWindows(_cb, None)
         return hwnds
 
+    def _window_has_captcha_webview(self, hwnd):
+        """True if `hwnd` has a WebView2 child window — the signal that the
+        Roblox client is showing the "Verifying you're not a bot" security
+        screen. A normal in-game window (class WINDOWSCLIENT, title "Roblox")
+        has no child windows; the captcha embeds a WebView2 whose host window
+        is class WEBVIEW2BROWSERAPP."""
+        found = {'hit': False}
+
+        def _cb(child, _):
+            try:
+                buf = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetClassNameW(child, buf, 256)
+                if buf.value and buf.value.upper() == 'WEBVIEW2BROWSERAPP':
+                    found['hit'] = True
+                    return False  # stop enumerating
+            except Exception:
+                pass
+            return True
+
+        try:
+            proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(_cb)
+            ctypes.windll.user32.EnumChildWindows(hwnd, proc, 0)
+        except Exception:
+            pass
+        return found['hit']
+
+    def _account_window_has_captcha(self, account):
+        """True if the account's tracked Roblox window is showing the
+        verification captcha / security WebView2 screen."""
+        pid = self.auto_rejoin_pids.get(account)
+        if not pid:
+            return False
+        try:
+            hwnds = self._get_roblox_hwnds_from_pids({pid})
+        except Exception:
+            return False
+        return any(self._window_has_captcha_webview(hwnd) for hwnd in hwnds)
+
     def _get_active_instance_usernames(self):
         """Return a list of usernames that correspond to currently running Roblox instances.
 
@@ -2860,6 +2968,59 @@ del /f /q "%~f0"
                 time.sleep(6)
                 break
         self._tile_roblox_windows()
+
+    def _minimize_roblox_windows(self):
+        pids = self._get_roblox_pids()
+        if not pids:
+            return
+        hwnds = self._get_roblox_hwnds_from_pids(pids)
+        if not hwnds:
+            return
+        SW_MINIMIZE = 6
+        n = 0
+        for hwnd in hwnds:
+            try:
+                win32gui.ShowWindow(hwnd, SW_MINIMIZE)
+                n += 1
+            except Exception as e:
+                print(f"[ERROR] Could not minimize window {hwnd}: {e}")
+        print(f"[INFO] Minimized {n} Roblox window(s).")
+
+    def _minimize_roblox_windows_after_launch(self):
+        prev_count = len(self._get_roblox_pids())
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            time.sleep(3)
+            curr_count = len(self._get_roblox_pids())
+            if curr_count > prev_count:
+                time.sleep(6)
+                break
+        self._minimize_roblox_windows()
+
+    def _arrange_roblox_windows_after_start_all(self):
+        """After 'Start All' in auto-rejoin, wait for instances to settle, then
+        apply the user's window-arrangement preference (tile or minimize).
+
+        Start All may relaunch already-running accounts AND launch new ones, so
+        we wait for the Roblox process count to stop *changing* (rather than for
+        it to simply increase, as the after-launch helpers do)."""
+        deadline = time.time() + 40
+        last_count = -1
+        stable_ticks = 0
+        while time.time() < deadline:
+            time.sleep(2)
+            count = len(self._get_roblox_pids())
+            if count > 0 and count == last_count:
+                stable_ticks += 1
+                if stable_ticks >= 3:  # ~6s with no change → launches settled
+                    break
+            else:
+                stable_ticks = 0
+            last_count = count
+        if self.settings.get("auto_minimize_windows", False):
+            self._minimize_roblox_windows()
+        elif self.settings.get("auto_tile_windows", False):
+            self._tile_roblox_windows()
 
     def _save_cookie_status(self, username, is_valid):
         """Update cookie status in memory and persist to accounts file"""
@@ -4044,8 +4205,11 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
             
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1:
+                if self.settings.get("auto_minimize_windows", False):
+                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
+                elif self.settings.get("auto_tile_windows", False):
+                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -4121,8 +4285,11 @@ del /f /q "%~f0"
             if failed_launch:
                 self._silent_check_cookies()
 
-            if success_count > 1 and self.settings.get("auto_tile_windows", False):
-                threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
+            if success_count > 1:
+                if self.settings.get("auto_minimize_windows", False):
+                    threading.Thread(target=self._minimize_roblox_windows_after_launch, daemon=True).start()
+                elif self.settings.get("auto_tile_windows", False):
+                    threading.Thread(target=self._tile_roblox_windows_after_launch, daemon=True).start()
 
             def on_done():
                 if success_count > 0:
@@ -4663,6 +4830,10 @@ del /f /q "%~f0"
 
             for account in accounts:
                 self.start_auto_rejoin_for_account(account)
+
+            if accounts and (self.settings.get("auto_minimize_windows", False)
+                             or self.settings.get("auto_tile_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_start_all, daemon=True).start()
 
             auto_rejoin_window.after(500, refresh_rejoin_list)
             messagebox.showinfo("Started", f"Auto-rejoin started for all {len(accounts)} account(s)!")
@@ -5835,6 +6006,9 @@ del /f /q "%~f0"
             else:
                 messagebox.showerror("Error", "Failed to save WebSocket password.", parent=settings_window)
 
+        def _open_websocket_docs():
+            webbrowser.open("https://evanovars-roblox-account-manager.gitbook.io/evanovars-ram")
+
         def _update_dev_controls():
             state = "normal" if dev_mode_var.get() else "disabled"
             try:
@@ -5905,14 +6079,25 @@ del /f /q "%~f0"
             font=(self.FONT_FAMILY, 8)
         ).pack(anchor="w", pady=(0, 6))
 
+        ws_enabled_row = ttk.Frame(dev_frame, style="Dark.TFrame")
+        ws_enabled_row.pack(fill="x", pady=(0, 4))
+
         ws_enabled_check = ttk.Checkbutton(
-            dev_frame,
+            ws_enabled_row,
             text="Enable WebSocket",
             variable=ws_enabled_var,
             style="Dark.TCheckbutton",
             command=_save_ws_enabled
         )
-        ws_enabled_check.pack(anchor="w", pady=(0, 4))
+        ws_enabled_check.pack(side="left")
+
+        ws_docs_btn = ttk.Button(
+            ws_enabled_row,
+            text="Documentation",
+            style="Dark.TButton",
+            command=_open_websocket_docs
+        )
+        ws_docs_btn.pack(side="left", padx=(8, 0))
 
         ws_port_row = ttk.Frame(dev_frame, style="Dark.TFrame")
         ws_port_row.pack(fill="x", pady=(0, 4))
@@ -6068,15 +6253,53 @@ del /f /q "%~f0"
         self.disable_launch_popup_check = disable_launch_popup_check
 
         auto_tile_windows_var = tk.BooleanVar(value=self.settings.get("auto_tile_windows", False))
+        auto_minimize_windows_var = tk.BooleanVar(value=self.settings.get("auto_minimize_windows", False))
+
+        def on_auto_tile_toggle():
+            # Tiling and minimizing conflict — enabling one disables the other.
+            if auto_tile_windows_var.get():
+                auto_minimize_windows_var.set(False)
+                self.settings["auto_minimize_windows"] = False
+            self.settings["auto_tile_windows"] = auto_tile_windows_var.get()
+            self.save_settings()
+
+        def on_auto_minimize_toggle():
+            if auto_minimize_windows_var.get():
+                auto_tile_windows_var.set(False)
+                self.settings["auto_tile_windows"] = False
+            self.settings["auto_minimize_windows"] = auto_minimize_windows_var.get()
+            self.save_settings()
+
         auto_tile_check = ttk.Checkbutton(
             main_frame,
             text="Auto Tile Windows",
             variable=auto_tile_windows_var,
             style="Dark.TCheckbutton",
-            command=auto_save_setting("auto_tile_windows", auto_tile_windows_var)
+            command=on_auto_tile_toggle
         )
         auto_tile_check.pack(anchor="w", pady=2)
         self.auto_tile_check = auto_tile_check
+
+        auto_minimize_check = ttk.Checkbutton(
+            main_frame,
+            text="Auto Minimize Windows",
+            variable=auto_minimize_windows_var,
+            style="Dark.TCheckbutton",
+            command=on_auto_minimize_toggle
+        )
+        auto_minimize_check.pack(anchor="w", pady=2)
+        self.auto_minimize_check = auto_minimize_check
+
+        join_off_use_app_var = tk.BooleanVar(value=self.settings.get("join_off_use_app", True))
+        join_off_use_app_check = ttk.Checkbutton(
+            main_frame,
+            text="Join-Off via App (follow friend, no browser)",
+            variable=join_off_use_app_var,
+            style="Dark.TCheckbutton",
+            command=auto_save_setting("join_off_use_app", join_off_use_app_var)
+        )
+        join_off_use_app_check.pack(anchor="w", pady=2)
+        self.join_off_use_app_check = join_off_use_app_check
 
         def is_start_menu_shortcut_present():
             """Check if Start Menu shortcut exists"""
@@ -9333,6 +9556,10 @@ del /f /q "%~f0"
             self.anti_afk_tooltip_label = None
 
     def _show_anti_afk_tooltip(self, text):
+        if not self.settings.get("anti_afk_tooltip_enabled", True):
+            self._hide_anti_afk_tooltip()
+            return
+
         if self.anti_afk_stop_event.is_set() or not self.root.winfo_exists():
             return
 
@@ -9465,7 +9692,7 @@ del /f /q "%~f0"
         anti_afk_window.transient(self.root)
 
         settings_width = 300
-        settings_height = 225
+        settings_height = 250
         self.root.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
@@ -9495,10 +9722,12 @@ del /f /q "%~f0"
         action_key_var = tk.StringVar(value=self.settings.get("anti_afk_key", "w"))
         press_time_var = tk.IntVar(value=int(self.settings.get("anti_afk_press_count", self.settings.get("anti_afk_key_amount", 1))))
         interval_var = tk.IntVar(value=int(self.settings.get("anti_afk_interval_minutes", 10)))
+        tooltip_var = tk.BooleanVar(value=self.settings.get("anti_afk_tooltip_enabled", True))
 
         def save_anti_afk_settings():
             self.settings["anti_afk_enabled"] = enabled_var.get()
             self.settings["anti_afk_key"] = action_key_var.get().strip().lower() or "w"
+            self.settings["anti_afk_tooltip_enabled"] = tooltip_var.get()
             try:
                 self.settings["anti_afk_press_count"] = max(1, int(press_time_var.get()))
             except Exception:
@@ -9522,7 +9751,15 @@ del /f /q "%~f0"
             variable=enabled_var,
             style="Dark.TCheckbutton",
             command=on_enabled_toggle
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            main_frame,
+            text="Show Tooltip",
+            variable=tooltip_var,
+            style="Dark.TCheckbutton",
+            command=save_anti_afk_settings
+        ).pack(anchor="w", pady=2)
 
         action_row = ttk.Frame(main_frame, style="Dark.TFrame")
         action_row.pack(fill="x", pady=2)
@@ -9893,7 +10130,9 @@ del /f /q "%~f0"
         )
 
         consecutive_failed_checks = 0
-        max_consecutive_fails = 3
+        max_consecutive_fails = 2
+        consecutive_captcha_checks = 0
+        max_consecutive_captcha = 1
 
         if account in self.auto_rejoin_pids:
             print(f"[Auto-Rejoin] [{account}] Using pre-matched PID {self.auto_rejoin_pids[account]}")
@@ -9930,8 +10169,37 @@ del /f /q "%~f0"
                     check_presence = False
                 disconnect_detected = False
                 game_id = ''
+                captcha_forced = False
 
-                if check_presence:
+                # Captcha watchdog: Roblox sometimes keeps reporting presence
+                # in_game=true while showing a "Verifying you're not a bot"
+                # security screen (a WebView2 child window on the game window).
+                # The game is non-functional then, so treat it as a disconnect:
+                # kill the instance and let the rejoin path relaunch it fresh.
+                # Require it to persist across checks to avoid acting on a
+                # transient web overlay.
+                if self._account_window_has_captcha(account):
+                    consecutive_captcha_checks += 1
+                    if consecutive_captcha_checks >= max_consecutive_captcha:
+                        consecutive_captcha_checks = 0
+                        captcha_forced = True
+                        disconnect_detected = True
+                        print(f"[Auto-Rejoin] [{account}] Captcha/security screen detected — killing instance.")
+                        self._maybe_send_webhook_embed(
+                            "Auto Rejoin — Captcha Detected",
+                            f"**{account}** hit a verification captcha (presence still read in-game). Killing and relaunching.",
+                            0xE67E22
+                        )
+                    else:
+                        if wait_next_check():
+                            break
+                        continue
+                else:
+                    consecutive_captcha_checks = 0
+
+                if captcha_forced:
+                    pass
+                elif check_presence:
                     in_game, current_place_id, game_id, pres_err = self.is_player_in_game(user_id, cookie, place_id, stop_event)
                     if pres_err:
                         self._maybe_send_webhook_embed(
@@ -10141,9 +10409,17 @@ del /f /q "%~f0"
                 if not self._is_account_currently_in_game(join_off):
                     print(f"[Auto-Rejoin] [{account}] Waiting for {join_off} to be in-game before joining off them")
                     return None
-                success = self.manager.launch_roblox_profile_join(
-                    account, join_off, launcher_pref, custom_launcher_path
-                )
+                if self.settings.get("join_off_use_app", True):
+                    # App path: open RobloxPlayerBeta and follow the friend in
+                    # (RequestFollowUser) — no browser, no mouse takeover.
+                    success = self.manager.launch_roblox_follow_user(
+                        account, join_off, launcher_pref, custom_launcher_path
+                    )
+                else:
+                    # Browser path: navigate to the friend's profile and click Join.
+                    success = self.manager.launch_roblox_profile_join(
+                        account, join_off, launcher_pref, custom_launcher_path
+                    )
             else:
                 success = self.manager.launch_roblox(account, place_id, private_server, launcher_pref, job_id, custom_launcher_path)
             
@@ -10404,50 +10680,96 @@ del /f /q "%~f0"
         except Exception:
             original_hwnd = None
 
+        original_placement = None
+        if original_hwnd and win32gui.IsWindow(original_hwnd):
+            try:
+                original_placement = win32gui.GetWindowPlacement(original_hwnd)
+            except Exception:
+                original_placement = None
+
         for hwnd in hwnds:
             if self.anti_afk_stop_event.is_set():
                 break
 
             window_spec = f"[HANDLE:0x{hwnd:08X}]"
             try:
+                window_placement = None
+                try:
+                    window_placement = win32gui.GetWindowPlacement(hwnd)
+                except Exception:
+                    window_placement = None
+
                 try:
                     autoit.win_activate(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 9)
-                    win32gui.SetForegroundWindow(hwnd)
+                    try:
+                        win32gui.ShowWindow(hwnd, 9)
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
 
-                time.sleep(0.15)
+                time.sleep(0.12)
 
                 try:
                     autoit.win_maximize(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 3)
+                    try:
+                        win32gui.ShowWindow(hwnd, 3)
+                    except Exception:
+                        pass
 
-                time.sleep(0.15)
+                try:
+                    autoit.win_activate(window_spec)
+                except Exception:
+                    pass
+
+                time.sleep(0.12)
+
                 for _ in range(max(1, int(press_count))):
                     if self.anti_afk_stop_event.is_set():
                         break
                     self._anti_afk_perform_action(action_key)
-                    time.sleep(0.15)
+                    time.sleep(0.1)
+
+                time.sleep(0.08)
+
+                if window_placement:
+                    try:
+                        win32gui.SetWindowPlacement(hwnd, window_placement)
+                    except Exception:
+                        pass
 
                 try:
-                    autoit.win_minimize(window_spec)
+                    autoit.win_activate(window_spec)
                 except Exception:
-                    win32gui.ShowWindow(hwnd, 6)
-
-                time.sleep(0.1)
+                    try:
+                        if window_placement and len(window_placement) > 1 and window_placement[1] == 3:
+                            win32gui.ShowWindow(hwnd, 3)
+                        else:
+                            win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"[Anti-AFK] Error on window {hwnd}: {e}")
 
-        if original_hwnd and win32gui.IsWindow(original_hwnd):
+        if original_placement and win32gui.IsWindow(original_hwnd):
+            hwnd = original_hwnd
+            window_spec = f"[HANDLE:0x{hwnd:08X}]"
             try:
-                original_spec = f"[HANDLE:0x{original_hwnd:08X}]"
-                autoit.win_activate(original_spec)
-            except Exception:
                 try:
-                    win32gui.SetForegroundWindow(original_hwnd)
+                    win32gui.SetWindowPlacement(hwnd, original_placement)
                 except Exception:
                     pass
+
+                try:
+                    autoit.win_activate(window_spec)
+                except Exception:
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _anti_afk_perform_action(self, action_key):
         mouse_actions = {
