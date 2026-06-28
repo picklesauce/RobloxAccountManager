@@ -260,6 +260,7 @@ Have questions or need help? Join our **[Discord Server](https://discord.gg/TYnJ
 | **Anti-AFK Window** | Opens a dedicated maintenance window for anti-AFK controls | Roblox tab → click **Anti-AFK** |
 | **Key Recording** | Record any keyboard or mouse input as the maintenance action | Anti-AFK window → click the action key button |
 | **Press Time** | Set how long the chosen input is held during maintenance | Anti-AFK window → set press time |
-| **Configurable Interval** | Set how often maintenance runs | Anti-AFK window → set interval |
-| **30s Countdown Tooltip** | Shows a countdown before each maintenance cycle | Automatic while Anti-AFK is enabled |
+| **Configurable Interval** | Set how often the timer runs maintenance | Anti-AFK window → set interval |
+| **30s Countdown Tooltip** | Shows a countdown before each timed maintenance cycle | Automatic while Anti-AFK is enabled |
+| **Trigger Now (manual)** | Runs one maintenance pass immediately over all open Roblox windows, independent of the timer — works whether or not the timer is enabled | Anti-AFK window → click **Trigger Now** |
 | **Roblox RAM Trim** | Clears the working set of newly detected Roblox processes | Roblox tab → enable **Optimize Roblox Ram** |

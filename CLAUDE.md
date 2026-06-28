@@ -164,10 +164,49 @@ Window-arrangement helpers (all in `utils/ui.py`):
   and either toggle is set.
 - `_arrange_roblox_windows_after_start_all` — same idea after the auto-rejoin
   "Start All", also ending in `_apply_window_arrangement`.
+- `_minimize_roblox_window_for_pid(pid)` — minimizes **only** the window owned by
+  `pid`, polling up to 45 s for that window to appear. Used by the auto-rejoin
+  worker path (see below) so a freshly (re)launched instance is minimized
+  without disturbing other windows. Unlike `_apply_window_arrangement` (which
+  acts on *all* Roblox windows), this is per-PID.
+
+The above `_apply_window_arrangement`-based helpers cover **manual** launches and
+"Start All". The auto-rejoin **worker** path (initial per-account start *and*
+every disconnect-relaunch) goes through `_launch_and_track_pid`, which — when
+`auto_minimize_windows` is set — spawns `_minimize_roblox_window_for_pid` for the
+newly-tracked PID in a daemon thread (off the `auto_rejoin_launch_lock`). This is
+why auto-minimize now applies to auto-rejoin relaunches, not just batch launches.
 
 (Replaces the older `_tile_roblox_windows_after_launch` /
 `_minimize_roblox_windows_after_launch` pair and the previous "minimize *or*
 tile" mutually-exclusive logic.)
+
+## Anti-AFK
+
+The Anti-AFK window (`open_anti_afk_window` in `utils/ui.py`) keeps Roblox
+sessions alive by activating each Roblox window in turn and sending the
+configured action key/mouse input (`_anti_afk_run_maintenance_cycle` →
+`_anti_afk_perform_action`). Settings live under `anti_afk_*`
+(`anti_afk_enabled`, `anti_afk_interval_minutes`, `anti_afk_press_count`,
+`anti_afk_key`, `anti_afk_tooltip_enabled`).
+
+Two ways to fire a maintenance pass, both funneling through
+**`_anti_afk_trigger_once`**:
+
+- **Timer** — `anti_afk_worker` (daemon thread, started by `start_anti_afk`)
+  waits the configured interval, shows a 30 s countdown tooltip, then triggers
+  a pass. Enabled via the "Enable Anti-AFK" checkbox.
+- **Manual "Trigger Now" button** — runs one pass immediately in a daemon
+  thread, independent of the timer (works whether or not the timer is enabled).
+
+`_anti_afk_trigger_once` holds **`self.anti_afk_run_lock`** (non-blocking
+acquire) so the timer and the manual button can't run a pass simultaneously and
+fight over window focus — if a pass is already running, the second trigger is
+skipped. `_anti_afk_run_maintenance_cycle` takes a `should_stop` callable for
+mid-pass cancellation: the timer passes `anti_afk_stop_event.is_set` (so
+disabling Anti-AFK aborts an in-flight timed pass), while the manual button
+passes nothing so a one-shot pass always completes (the manual path must NOT be
+gated on `anti_afk_stop_event`, which stays *set* whenever the timer is off).
 
 ## Encryption
 
