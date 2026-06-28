@@ -108,6 +108,9 @@ class AccountManagerUI:
         self.anti_afk_tooltip = None
         self.anti_afk_tooltip_label = None
         self.anti_afk_tooltip_timer = None
+        # Guards a single anti-AFK maintenance pass so the timer worker and the
+        # manual "Trigger Now" button can't fight over window focus at once.
+        self.anti_afk_run_lock = threading.Lock()
         self.optimize_ram_thread = None
         self.optimize_ram_stop_event = threading.Event()
         self.optimize_ram_seen_pids = set()
@@ -2974,6 +2977,30 @@ del /f /q "%~f0"
             except Exception as e:
                 print(f"[ERROR] Could not minimize window {hwnd}: {e}")
         print(f"[INFO] Minimized {n} Roblox window(s).")
+
+    def _minimize_roblox_window_for_pid(self, pid, timeout=45):
+        """Wait for the Roblox window belonging to `pid` to appear, then minimize
+        only that window. Used by the auto-rejoin launch/relaunch path so a freshly
+        (re)launched instance gets minimized without disturbing other windows the
+        user may have intentionally restored.
+
+        The process exists before its window does (the window with a title shows a
+        few seconds after launch), so we poll up to `timeout` seconds for it. Runs
+        in its own daemon thread — never call this while holding a launch lock."""
+        SW_MINIMIZE = 6
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            hwnds = self._get_roblox_hwnds_from_pids({pid})
+            if hwnds:
+                for hwnd in hwnds:
+                    try:
+                        win32gui.ShowWindow(hwnd, SW_MINIMIZE)
+                    except Exception as e:
+                        print(f"[ERROR] Could not minimize window {hwnd} (pid {pid}): {e}")
+                print(f"[INFO] Auto-minimized Roblox window for PID {pid}.")
+                return
+            time.sleep(1)
+        print(f"[INFO] Window for PID {pid} never appeared within {timeout}s; nothing minimized.")
 
     def _apply_window_arrangement(self):
         """Apply enabled window-arrangement preferences in order: tile first,
@@ -9735,7 +9762,7 @@ del /f /q "%~f0"
         anti_afk_window.transient(self.root)
 
         settings_width = 300
-        settings_height = 250
+        settings_height = 295
         self.root.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - settings_width) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - settings_height) // 2
@@ -9867,12 +9894,50 @@ del /f /q "%~f0"
         interval_spinner.bind("<KeyRelease>", lambda _e: save_anti_afk_settings())
         interval_spinner.bind("<FocusOut>", lambda _e: save_anti_afk_settings())
 
+        def trigger_now():
+            save_anti_afk_settings()
+            action_key = str(self.settings.get("anti_afk_key", "w") or "w").strip().lower()
+            press_count = max(1, int(self.settings.get("anti_afk_press_count", 1)))
+
+            if self.anti_afk_run_lock.locked():
+                self._show_anti_afk_tooltip("Anti-AFK pass already running")
+                return
+
+            trigger_button.config(text="Running…", state="disabled")
+
+            def worker():
+                ran = self._anti_afk_trigger_once(action_key, press_count)
+
+                def restore():
+                    try:
+                        if trigger_button.winfo_exists():
+                            trigger_button.config(text="Trigger Now", state="normal")
+                    except Exception:
+                        pass
+                    if not ran:
+                        self._show_anti_afk_tooltip("Anti-AFK pass already running")
+
+                try:
+                    self.root.after(0, restore)
+                except Exception:
+                    pass
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        trigger_button = ttk.Button(
+            main_frame,
+            text="Trigger Now",
+            style="Dark.TButton",
+            command=trigger_now
+        )
+        trigger_button.pack(fill="x", pady=(12, 0))
+
         ttk.Button(
             main_frame,
             text="Close",
             style="Dark.TButton",
             command=on_close
-        ).pack(fill="x", pady=(12, 0))
+        ).pack(fill="x", pady=(6, 0))
 
         if enabled_var.get():
             self.start_anti_afk()
@@ -10486,6 +10551,16 @@ del /f /q "%~f0"
                 new_pid = max(available_pids)
                 self.auto_rejoin_pids[account] = new_pid
                 print(f"[Auto-Rejoin] [{account}] Successfully tracked PID {new_pid}")
+                # Minimize the freshly (re)launched window if the user enabled it.
+                # Targets only this PID's window so other instances are untouched,
+                # and runs off-thread so we don't hold auto_rejoin_launch_lock while
+                # waiting for the window to appear.
+                if self.settings.get("auto_minimize_windows", False):
+                    threading.Thread(
+                        target=self._minimize_roblox_window_for_pid,
+                        args=(new_pid,),
+                        daemon=True
+                    ).start()
                 return True
             else:
                 print(f"[Auto-Rejoin] [{account}] All new PIDs are already tracked by other accounts")
@@ -10701,13 +10776,31 @@ del /f /q "%~f0"
                         return
 
                 self._hide_anti_afk_tooltip()
-                self._anti_afk_run_maintenance_cycle(action_key, press_count)
+                self._anti_afk_trigger_once(action_key, press_count)
 
             except Exception as e:
                 print(f"[Anti-AFK] Error: {e}")
                 time.sleep(5)
 
-    def _anti_afk_run_maintenance_cycle(self, action_key, press_count):
+    def _anti_afk_trigger_once(self, action_key, press_count, should_stop=None):
+        """Run exactly one anti-AFK maintenance pass, guarded so only a single
+        pass runs at a time. Both the timer worker and the manual "Trigger Now"
+        button funnel through here. ``should_stop`` is an optional callable used
+        to cancel mid-pass; the timer passes its stop event, the manual button
+        passes nothing so a one-shot pass always completes. Returns True if a
+        pass ran, or False if a pass was already in progress and was skipped."""
+        if not self.anti_afk_run_lock.acquire(blocking=False):
+            print("[Anti-AFK] Pass already running; skipping this trigger")
+            return False
+        try:
+            self._anti_afk_run_maintenance_cycle(action_key, press_count, should_stop=should_stop)
+            return True
+        finally:
+            self.anti_afk_run_lock.release()
+
+    def _anti_afk_run_maintenance_cycle(self, action_key, press_count, should_stop=None):
+        if should_stop is None:
+            should_stop = self.anti_afk_stop_event.is_set
         roblox_pids = self._get_roblox_pids()
         if not roblox_pids:
             print("[Anti-AFK] No Roblox processes found")
@@ -10731,7 +10824,7 @@ del /f /q "%~f0"
                 original_placement = None
 
         for hwnd in hwnds:
-            if self.anti_afk_stop_event.is_set():
+            if should_stop():
                 break
 
             window_spec = f"[HANDLE:0x{hwnd:08X}]"
@@ -10769,7 +10862,7 @@ del /f /q "%~f0"
                 time.sleep(0.12)
 
                 for _ in range(max(1, int(press_count))):
-                    if self.anti_afk_stop_event.is_set():
+                    if should_stop():
                         break
                     self._anti_afk_perform_action(action_key)
                     time.sleep(0.1)
