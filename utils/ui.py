@@ -4198,9 +4198,11 @@ del /f /q "%~f0"
             success_count = 0
             failed_launch = False
             for uname in selected_usernames:
+                pids_before = self._get_roblox_pids()
                 try:
                     if self.manager.launch_roblox(uname, "", "", launcher_pref, "", custom_launcher_path):
                         success_count += 1
+                        self._record_launched_account(uname, pids_before)
                     else:
                         failed_launch = True
                 except Exception as e:
@@ -4274,15 +4276,15 @@ del /f /q "%~f0"
             success_count = 0
             failed_launch = False
             for i, uname in enumerate(selected_usernames):
+                pids_before = self._get_roblox_pids()
                 try:
                     if self.manager.launch_roblox(uname, pid, psid, launcher_pref, "", custom_launcher_path):
                         success_count += 1
+                        self._record_launched_account(uname, pids_before)
                     else:
                         failed_launch = True
                 except Exception as e:
                     print(f"[ERROR] Failed to launch game for {uname}: {e}")
-                if i < len(selected_usernames) - 1:
-                    time.sleep(2)
             if failed_launch:
                 self._silent_check_cookies()
 
@@ -10534,6 +10536,14 @@ del /f /q "%~f0"
             if available_pids:
                 new_pid = max(available_pids)
                 self.auto_rejoin_pids[account] = new_pid
+                with self.pid_account_lock:
+                    self.pid_account_map[new_pid] = account
+                if self.settings.get("rename_roblox_windows", True):
+                    threading.Thread(
+                        target=self._rename_window_for_pid_when_ready,
+                        args=(new_pid, account),
+                        daemon=True
+                    ).start()
                 print(f"[Auto-Rejoin] [{account}] Successfully tracked PID {new_pid}")
                 return True
             else:
