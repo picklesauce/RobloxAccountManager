@@ -78,3 +78,35 @@ def test_prune_resets_dead_pid():
     assert d.update(100, LOUD, now=1000.0) is True
     d.prune(live_pids=set())                  # 100 no longer present
     assert d.update(100, LOUD, now=1000.5) is True    # treated as brand new
+
+
+from utils.sound_tracker import filter_roblox_peaks
+
+
+def _is_roblox(pid, name):
+    return name == "robloxplayerbeta.exe"
+
+
+def test_filter_keeps_only_roblox_pids():
+    readings = [
+        (100, "robloxplayerbeta.exe", 0.4),
+        (200, "chrome.exe", 0.9),
+        (300, "robloxplayerbeta.exe", 0.1),
+    ]
+    result = filter_roblox_peaks(readings, _is_roblox)
+    assert result == {100: 0.4, 300: 0.1}
+
+
+def test_filter_takes_max_peak_per_pid():
+    readings = [
+        (100, "robloxplayerbeta.exe", 0.2),
+        (100, "robloxplayerbeta.exe", 0.7),
+        (100, "robloxplayerbeta.exe", 0.3),
+    ]
+    result = filter_roblox_peaks(readings, _is_roblox)
+    assert result == {100: 0.7}
+
+
+def test_filter_skips_none_pid():
+    readings = [(None, "robloxplayerbeta.exe", 0.5)]
+    assert filter_roblox_peaks(readings, _is_roblox) == {}

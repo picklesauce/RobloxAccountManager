@@ -72,3 +72,56 @@ class SoundEdgeDetector:
         for pid in list(self._state.keys()):
             if pid not in live_pids:
                 del self._state[pid]
+
+
+# --- WASAPI peak reading (pycaw) -------------------------------------------
+
+try:
+    from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+    PYCAW_AVAILABLE = True
+except Exception:
+    PYCAW_AVAILABLE = False
+
+
+def filter_roblox_peaks(session_readings, is_roblox_pid):
+    """
+    session_readings: iterable of (pid, process_name, peak).
+    is_roblox_pid(pid, process_name) -> bool.
+    Returns {pid: max_peak} across a PID's sessions, for accepted PIDs only.
+    """
+    peaks = {}
+    for pid, name, peak in session_readings:
+        if pid is None:
+            continue
+        if not is_roblox_pid(pid, name):
+            continue
+        if pid not in peaks or peak > peaks[pid]:
+            peaks[pid] = peak
+    return peaks
+
+
+def _iter_session_peaks():
+    """Yield (pid, process_name_lower_or_None, peak) for every audio session."""
+    if not PYCAW_AVAILABLE:
+        return
+    for session in AudioUtilities.GetAllSessions():
+        try:
+            pid = session.ProcessId
+            if not pid:
+                continue
+            name = None
+            if session.Process is not None:
+                try:
+                    name = session.Process.name().lower()
+                except Exception:
+                    name = None
+            meter = session._ctl.QueryInterface(IAudioMeterInformation)
+            peak = meter.GetPeakValue()
+            yield (pid, name, peak)
+        except Exception:
+            continue
+
+
+def get_roblox_session_peaks(is_roblox_pid):
+    """{pid: peak} for Roblox game-client PIDs currently producing audio."""
+    return filter_roblox_peaks(_iter_session_peaks(), is_roblox_pid)
