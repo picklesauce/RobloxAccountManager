@@ -48,6 +48,7 @@ from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
 from utils import sound_tracker
+from utils import pid_labels
 import websockets
 
 class AccountManagerUI:
@@ -126,7 +127,13 @@ class AccountManagerUI:
         self.sound_detector = sound_tracker.SoundEdgeDetector()
         self._sound_pid_labels = {}   # pid -> resolved username (successes only)
         self._sound_valid_pids = {}   # pid -> bool (is a real Roblox game client)
-        
+
+        # Authoritative PID -> account username, captured at launch. Source of
+        # truth for window auto-rename and sound-event labels. Written by launch
+        # worker threads, read by the sound worker thread -> guard with the lock.
+        self.pid_account_map = {}
+        self.pid_account_lock = threading.Lock()
+
         self.instances_monitor_thread = None
         self.instances_monitor_stop = threading.Event()
         self.instances_data = []
@@ -9613,6 +9620,48 @@ del /f /q "%~f0"
             
             time.sleep(2)
     
+    def _record_launched_account(self, account, pids_before, timeout=12):
+        """After launching `account`, find the new Roblox PID it produced and
+        record it authoritatively in pid_account_map. Renames its window
+        off-thread when enabled. Returns the PID, or None if none could be
+        unambiguously identified within `timeout` seconds.
+
+        Call this synchronously from a launch worker (it polls up to `timeout`),
+        so each account's PID is claimed before the next launch starts."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pids_after = self._get_roblox_pids()
+            with self.pid_account_lock:
+                assigned = set(self.pid_account_map)
+            new_pid = pid_labels.pick_launched_pid(pids_before, pids_after, assigned)
+            if new_pid is not None:
+                with self.pid_account_lock:
+                    self.pid_account_map[new_pid] = account
+                print(f"[Rename] Tracked {account} -> PID {new_pid}")
+                if self.settings.get("rename_roblox_windows", True):
+                    threading.Thread(
+                        target=self._rename_window_for_pid_when_ready,
+                        args=(new_pid, account),
+                        daemon=True
+                    ).start()
+                return new_pid
+            time.sleep(0.5)
+        print(f"[Rename] Could not identify a new PID for {account} within {timeout}s")
+        return None
+
+    def _rename_window_for_pid_when_ready(self, pid, name, timeout=45):
+        """Wait for the window owned by `pid` to appear, then set its title to
+        `name`. Mirrors _minimize_roblox_window_for_pid's polling. Daemon thread
+        only — never call while holding a launch lock."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._get_roblox_hwnds_from_pids({pid}):
+                self._rename_roblox_window(pid, name)
+                print(f"[Rename] Renamed window for PID {pid} -> '{name}'")
+                return
+            time.sleep(1)
+        print(f"[Rename] Window for PID {pid} never appeared within {timeout}s; not renamed")
+
     def _rename_roblox_window(self, pid, username):
         """Rename a Roblox window by PID"""
         try:
