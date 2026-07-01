@@ -112,10 +112,6 @@ class AccountManagerUI:
         self.optimize_ram_thread = None
         self.optimize_ram_stop_event = threading.Event()
         self.optimize_ram_seen_pids = set()
-        
-        self.rename_thread = None
-        self.rename_stop_event = threading.Event()
-        self.renamed_pids = set()
 
         # Authoritative PID -> account username, captured at launch. Source of
         # truth for window auto-rename. Written by launch worker threads and read
@@ -440,10 +436,7 @@ class AccountManagerUI:
 
         if hasattr(self, 'optimize_ram_stop_event'):
             self.stop_optimize_roblox_ram()
-        
-        if hasattr(self, 'rename_stop_event'):
-            self.stop_rename_monitoring()
-        
+
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
 
@@ -6687,21 +6680,17 @@ del /f /q "%~f0"
         )
         force_close_btn.pack(fill="x", pady=(0, 5))
         
-        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", False))
-        
+        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", True))
+
         def on_rename_toggle():
-            enabled = rename_var.get()
-            self.settings["rename_roblox_windows"] = enabled
+            # Rename now happens at launch; the toggle is just a stored preference
+            # read by the launch paths. Takes effect on the next launch.
+            self.settings["rename_roblox_windows"] = rename_var.get()
             self.save_settings()
-            
-            if enabled:
-                self.start_rename_monitoring()
-            else:
-                self.stop_rename_monitoring()
-        
+
         ttk.Checkbutton(
             roblox_frame,
-            text="Rename Roblox Windows",
+            text="Rename Roblox Windows (on launch)",
             variable=rename_var,
             style="Dark.TCheckbutton",
             command=on_rename_toggle
@@ -6852,9 +6841,6 @@ del /f /q "%~f0"
 
         optimize_ram_check.config(command=on_optimize_ram_toggle_wrapper)
 
-        if self.settings.get("rename_roblox_windows", False):
-            self.root.after(1000, self.start_rename_monitoring)
-        
         if self.settings.get("active_instances_monitoring", False):
             self.root.after(1500, self.start_instances_monitoring)
         
@@ -9498,64 +9484,6 @@ del /f /q "%~f0"
             command=favorites_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(2, 0))
     
-    def start_rename_monitoring(self):
-        """Start monitoring and renaming Roblox windows"""
-        if self.rename_thread and self.rename_thread.is_alive():
-            return
-        
-        self.rename_stop_event.clear()
-        self.renamed_pids.clear()
-        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True)
-        self.rename_thread.start()
-        print("[INFO] Rename monitoring started")
-    
-    def stop_rename_monitoring(self):
-        """Stop rename monitoring"""
-        if self.rename_thread:
-            self.rename_stop_event.set()
-            self.rename_thread = None
-            self.renamed_pids.clear()
-            print("[INFO] Rename monitoring stopped")
-    
-    def _rename_monitoring_worker(self):
-        """Monitor for new Roblox PIDs and renames them"""
-        while not self.rename_stop_event.is_set():
-            try:
-                current_pids = set()
-                for proc in psutil.process_iter(['pid', 'name']):
-                    try:
-                        if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            pid = proc.info['pid']
-                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                                current_pids.add(pid)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                new_pids = current_pids - self.renamed_pids
-                
-                for pid in new_pids:
-                    if self.rename_stop_event.is_set():
-                        break
-                    
-                    user_id, _ = self._get_user_id_from_pid(pid)
-                    
-                    if user_id:
-                        username = RobloxAPI.get_username_from_user_id(user_id)
-                        
-                        if username:
-                            self._rename_roblox_window(pid, username)
-                            self.renamed_pids.add(pid)
-                            print(f"[INFO] Renamed Roblox window for PID {pid} to '{username}'")
-                    
-                    time.sleep(0.5)
-                
-                self.renamed_pids = self.renamed_pids.intersection(current_pids)
-                
-            except Exception as e:
-                print(f"[ERROR] Error in rename monitoring: {e}")
-            
-            time.sleep(2)
-    
     def _record_launched_account(self, account, pids_before, timeout=12):
         """After launching `account`, find the new Roblox PID it produced and
         record it authoritatively in pid_account_map. Renames its window
@@ -10391,6 +10319,8 @@ del /f /q "%~f0"
                         except Exception as e:
                             print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
                         del self.auto_rejoin_pids[account]
+                        with self.pid_account_lock:
+                            self.pid_account_map.pop(old_pid, None)
 
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
                     success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
@@ -10661,6 +10591,8 @@ del /f /q "%~f0"
                 if account_user_id == pid_user_id:
                     matches[account] = pid
                     self.auto_rejoin_pids[account] = pid
+                    with self.pid_account_lock:
+                        self.pid_account_map[pid] = account
                     print(f"[Auto-Rejoin] MATCHED: {account} (user {account_user_id}) -> PID {pid}")
                     del pid_user_ids[pid]
                     break

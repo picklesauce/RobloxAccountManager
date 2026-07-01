@@ -169,6 +169,20 @@ Window-arrangement helpers (all in `utils/ui.py`):
 `_minimize_roblox_windows_after_launch` pair and the previous "minimize *or*
 tile" mutually-exclusive logic.)
 
+## Instance labeling (auto-rename)
+
+Roblox instances are labeled from an **authoritative `pid_account_map`
+(PID → account username)** captured at launch — no HTTP, no log-parsing. Every
+launch path (`launch_game`/`launch_home` workers and the auto-rejoin
+`_launch_and_track_pid`) snapshots Roblox PIDs before launch, and
+`_record_launched_account` uses `utils/pid_labels.pick_launched_pid` to identify
+the one new PID and record it. If `rename_roblox_windows` (default **on**) is set,
+`_rename_window_for_pid_when_ready` waits for that PID's window and sets its title
+to the account name. `_match_pids_to_accounts` (auto-rejoin "Start All") also
+writes the map; dead PIDs are dropped on disconnect. Only manager-launched
+instances are labeled. The old polling rename worker (`_rename_monitoring_worker`)
+was removed. Tests: `tests/test_pid_labels.py`.
+
 ## Encryption
 
 Three modes selected at first run: Hardware (tied to machine), Password (portable),
