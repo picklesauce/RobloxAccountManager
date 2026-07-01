@@ -237,7 +237,11 @@ on `pycaw` being installed) polls per-process WASAPI peak meters every
 silent→sound edge; `RELEASE_SECONDS` debounce + `COOLDOWN_SECONDS` rate limit).
 On an edge it labels the PID via `_resolve_pid_label` (reads the authoritative
 `pid_account_map` — see **Instance labeling** below) and calls `_on_sound_event`
-— the single seam where notification delivery will later plug in. The QOL/Roblox settings section exposes a "Track Roblox Sound Emission"
+— the single notification sink. `_on_sound_event` always console-logs and, when
+the Discord webhook is enabled (Settings → Integrations) with the `log_sound_events`
+filter on (or `log_everything`), posts an embed via `_send_webhook_embed`; if the
+master `enable_ping` and the `ping_on_sound` filter are both on and `ping_user_id`
+is set, the embed @-mentions that user. The QOL/Roblox settings section exposes a "Track Roblox Sound Emission"
 toggle (disabled with a note when `pycaw` is missing). Tests:
 `tests/test_sound_tracker.py` (run `py -m pytest tests/ -v`). New dependency:
 `pycaw`.

@@ -1578,6 +1578,7 @@ del /f /q "%~f0"
             "enable_ping": False,
             "ping_user_id": "",
             "ping_on_error": True,
+            "ping_on_sound": True,
             "log_everything": False,
             "log_errors": True,
             "log_success": True,
@@ -1585,6 +1586,7 @@ del /f /q "%~f0"
             "log_info": False,
             "log_auto_rejoin": True,
             "log_auto_rejoin_console": False,
+            "log_sound_events": True,
             "screenshot_interval_minutes": 60,
             "screenshot_enabled": False,
         }
@@ -7448,6 +7450,7 @@ del /f /q "%~f0"
         dc_ping_var = tk.BooleanVar(value=webhook_cfg.get("enable_ping", False))
         dc_ping_id_var = tk.StringVar(value=webhook_cfg.get("ping_user_id", ""))
         dc_ping_err_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_error", True))
+        dc_ping_sound_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_sound", True))
         dc_log_all_var = tk.BooleanVar(value=webhook_cfg.get("log_everything", False))
         dc_log_err_var = tk.BooleanVar(value=webhook_cfg.get("log_errors", True))
         dc_log_ok_var = tk.BooleanVar(value=webhook_cfg.get("log_success", True))
@@ -7455,6 +7458,7 @@ del /f /q "%~f0"
         dc_log_info_var = tk.BooleanVar(value=webhook_cfg.get("log_info", False))
         dc_log_rejoin_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin", True))
         dc_log_rejoin_console_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin_console", False))
+        dc_log_sound_var = tk.BooleanVar(value=webhook_cfg.get("log_sound_events", True))
         dc_screenshot_interval_var = tk.StringVar(value=str(webhook_cfg.get("screenshot_interval_minutes", 60)))
         dc_screenshot_enabled_var = tk.BooleanVar(value=webhook_cfg.get("screenshot_enabled", False))
 
@@ -7464,6 +7468,7 @@ del /f /q "%~f0"
             webhook_cfg["enable_ping"] = dc_ping_var.get()
             webhook_cfg["ping_user_id"] = dc_ping_id_var.get().strip()
             webhook_cfg["ping_on_error"] = dc_ping_err_var.get()
+            webhook_cfg["ping_on_sound"] = dc_ping_sound_var.get()
             webhook_cfg["log_everything"] = dc_log_all_var.get()
             webhook_cfg["log_errors"] = dc_log_err_var.get()
             webhook_cfg["log_success"] = dc_log_ok_var.get()
@@ -7471,6 +7476,7 @@ del /f /q "%~f0"
             webhook_cfg["log_info"] = dc_log_info_var.get()
             webhook_cfg["log_auto_rejoin"] = dc_log_rejoin_var.get()
             webhook_cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
+            webhook_cfg["log_sound_events"] = dc_log_sound_var.get()
             try:
                 webhook_cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
             except (ValueError, TypeError):
@@ -7535,6 +7541,13 @@ del /f /q "%~f0"
         ping_row2.pack(fill="x", pady=(2, 6))
         ttk.Checkbutton(
             ping_row2, text="Ping only on [ERROR]", variable=dc_ping_err_var,
+            style="Dark.TCheckbutton", command=_dc_save
+        ).pack(anchor="w", padx=(2, 0))
+
+        ping_row3 = ttk.Frame(dc_frame, style="Dark.TFrame")
+        ping_row3.pack(fill="x", pady=(0, 6))
+        ttk.Checkbutton(
+            ping_row3, text="Ping on sound event", variable=dc_ping_sound_var,
             style="Dark.TCheckbutton", command=_dc_save
         ).pack(anchor="w", padx=(2, 0))
 
@@ -7624,6 +7637,7 @@ del /f /q "%~f0"
                 _chk("Log [INFO]",                     dc_log_info_var),
                 _chk("Log Auto-Rejoin events",         dc_log_rejoin_var),
                 _chk("Log Auto-Rejoin console",        dc_log_rejoin_console_var),
+                _chk("Log Sound events",               dc_log_sound_var),
             ]
             _toggle_log_all()
 
@@ -9650,8 +9664,27 @@ del /f /q "%~f0"
         return sound_tracker.format_pid_label(pid, None)
 
     def _on_sound_event(self, pid, label, peak):
-        """Single sink for detected sound. Notification layer plugs in here later."""
+        """Single sink for detected sound: console log + optional Discord webhook."""
         print(f"[Sound] {label} (PID {pid}) emitted sound (peak={peak:.3f})")
+        try:
+            cfg = self.settings.get("discord_webhook", {})
+            url = str(cfg.get("url", "") or "").strip()
+            if not (cfg.get("enabled") and url):
+                return
+            if not (cfg.get("log_everything") or cfg.get("log_sound_events", True)):
+                return
+            ping_id = None
+            if cfg.get("enable_ping") and cfg.get("ping_on_sound", True):
+                ping_id = str(cfg.get("ping_user_id", "") or "").strip() or None
+            self._send_webhook_embed(
+                url,
+                "🔊 Instance Emitting Sound",
+                f"**{label}** (PID `{pid}`) started emitting audio.\nPeak level: `{peak:.3f}`",
+                0xE67E22,
+                ping_user_id=ping_id,
+            )
+        except Exception as e:
+            print(f"[Sound] Failed to send sound webhook: {e}")
 
     def _sound_monitoring_worker(self):
         """Poll per-process peaks; flag Roblox instances on silent->sound edges."""
