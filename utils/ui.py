@@ -125,7 +125,6 @@ class AccountManagerUI:
         self.sound_thread = None
         self.sound_stop_event = threading.Event()
         self.sound_detector = sound_tracker.SoundEdgeDetector()
-        self._sound_pid_labels = {}   # pid -> resolved username (successes only)
         self._sound_valid_pids = {}   # pid -> bool (is a real Roblox game client)
 
         # Authoritative PID -> account username, captured at launch. Source of
@@ -9690,7 +9689,6 @@ del /f /q "%~f0"
             return
         self.sound_stop_event.clear()
         self.sound_detector = sound_tracker.SoundEdgeDetector()
-        self._sound_pid_labels.clear()
         self._sound_valid_pids.clear()
         self.sound_thread = threading.Thread(
             target=self._sound_monitoring_worker, daemon=True)
@@ -9702,7 +9700,6 @@ del /f /q "%~f0"
         if self.sound_thread:
             self.sound_stop_event.set()
             self.sound_thread = None
-            self._sound_pid_labels.clear()
             self._sound_valid_pids.clear()
             print("[Sound] Sound monitoring stopped")
 
@@ -9716,20 +9713,12 @@ del /f /q "%~f0"
         return valid
 
     def _resolve_pid_label(self, pid):
-        """PID -> username, memoized. Failed lookups are not cached (retry later)."""
-        cached = self._sound_pid_labels.get(pid)
-        if cached is not None:
-            return cached
-        username = None
-        try:
-            user_id, _ = self._get_user_id_from_pid(pid)
-            if user_id:
-                username = RobloxAPI.get_username_from_user_id(user_id)
-        except Exception:
-            username = None
-        if username:
-            self._sound_pid_labels[pid] = username
-            return username
+        """PID -> account name from the authoritative launch map; 'PID <n>' on miss.
+        No HTTP or log-parsing: labels come only from capture-at-launch."""
+        with self.pid_account_lock:
+            account = self.pid_account_map.get(pid)
+        if account:
+            return account
         return sound_tracker.format_pid_label(pid, None)
 
     def _on_sound_event(self, pid, label, peak):
@@ -9754,8 +9743,6 @@ del /f /q "%~f0"
                             self._on_sound_event(pid, label, peak)
                     live = set(peaks.keys())
                     self.sound_detector.prune(live)
-                    self._sound_pid_labels = {
-                        p: l for p, l in self._sound_pid_labels.items() if p in live}
                     self._sound_valid_pids = {
                         p: v for p, v in self._sound_valid_pids.items() if p in live}
                 except Exception as e:
