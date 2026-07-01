@@ -47,6 +47,7 @@ from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
+from utils import sound_tracker
 import websockets
 
 class AccountManagerUI:
@@ -118,6 +119,13 @@ class AccountManagerUI:
         self.rename_thread = None
         self.rename_stop_event = threading.Event()
         self.renamed_pids = set()
+
+        # Sound-emission tracking (mirrors rename monitoring above)
+        self.sound_thread = None
+        self.sound_stop_event = threading.Event()
+        self.sound_detector = sound_tracker.SoundEdgeDetector()
+        self._sound_pid_labels = {}   # pid -> resolved username (successes only)
+        self._sound_valid_pids = {}   # pid -> bool (is a real Roblox game client)
         
         self.instances_monitor_thread = None
         self.instances_monitor_stop = threading.Event()
@@ -9590,7 +9598,94 @@ del /f /q "%~f0"
             win32gui.EnumWindows(enum_windows_callback, pid)
         except Exception as e:
             print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
-    
+
+    def start_sound_monitoring(self):
+        """Start monitoring which Roblox instance emits sound."""
+        if not sound_tracker.PYCAW_AVAILABLE:
+            print("[Sound] pycaw not installed; sound tracking disabled")
+            return
+        if self.sound_thread and self.sound_thread.is_alive():
+            return
+        self.sound_stop_event.clear()
+        self.sound_detector = sound_tracker.SoundEdgeDetector()
+        self._sound_pid_labels.clear()
+        self._sound_valid_pids.clear()
+        self.sound_thread = threading.Thread(
+            target=self._sound_monitoring_worker, daemon=True)
+        self.sound_thread.start()
+        print("[Sound] Sound monitoring started")
+
+    def stop_sound_monitoring(self):
+        """Stop sound monitoring."""
+        if self.sound_thread:
+            self.sound_stop_event.set()
+            self.sound_thread = None
+            self._sound_pid_labels.clear()
+            self._sound_valid_pids.clear()
+            print("[Sound] Sound monitoring stopped")
+
+    def _is_sound_pid(self, pid, name):
+        """Cached check: is this PID a real Roblox game client?"""
+        cached = self._sound_valid_pids.get(pid)
+        if cached is not None:
+            return cached
+        valid = self._is_valid_roblox_game_client(pid, name)
+        self._sound_valid_pids[pid] = valid
+        return valid
+
+    def _resolve_pid_label(self, pid):
+        """PID -> username, memoized. Failed lookups are not cached (retry later)."""
+        cached = self._sound_pid_labels.get(pid)
+        if cached is not None:
+            return cached
+        username = None
+        try:
+            user_id, _ = self._get_user_id_from_pid(pid)
+            if user_id:
+                username = RobloxAPI.get_username_from_user_id(user_id)
+        except Exception:
+            username = None
+        if username:
+            self._sound_pid_labels[pid] = username
+            return username
+        return sound_tracker.format_pid_label(pid, None)
+
+    def _on_sound_event(self, pid, label, peak):
+        """Single sink for detected sound. Notification layer plugs in here later."""
+        print(f"[Sound] {label} (PID {pid}) emitted sound (peak={peak:.3f})")
+
+    def _sound_monitoring_worker(self):
+        """Poll per-process peaks; flag Roblox instances on silent->sound edges."""
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            comtypes = None
+        try:
+            while not self.sound_stop_event.is_set():
+                try:
+                    peaks = sound_tracker.get_roblox_session_peaks(self._is_sound_pid)
+                    now = time.time()
+                    for pid, peak in peaks.items():
+                        if self.sound_detector.update(pid, peak, now):
+                            label = self._resolve_pid_label(pid)
+                            self._on_sound_event(pid, label, peak)
+                    live = set(peaks.keys())
+                    self.sound_detector.prune(live)
+                    self._sound_pid_labels = {
+                        p: l for p, l in self._sound_pid_labels.items() if p in live}
+                    self._sound_valid_pids = {
+                        p: v for p, v in self._sound_valid_pids.items() if p in live}
+                except Exception as e:
+                    print(f"[Sound] Error in sound monitoring: {e}")
+                self.sound_stop_event.wait(sound_tracker.POLL_INTERVAL)
+        finally:
+            if comtypes is not None:
+                try:
+                    comtypes.CoUninitialize()
+                except Exception:
+                    pass
+
     def start_anti_afk(self):
         """Start the Anti-AFK background thread"""
         if self.anti_afk_thread and self.anti_afk_thread.is_alive():
