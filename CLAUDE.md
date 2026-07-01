@@ -208,6 +208,22 @@ disabling Anti-AFK aborts an in-flight timed pass), while the manual button
 passes nothing so a one-shot pass always completes (the manual path must NOT be
 gated on `anti_afk_stop_event`, which stays *set* whenever the timer is off).
 
+## Instance labeling (auto-rename + sound labels)
+
+Roblox instances are labeled from an **authoritative `pid_account_map`
+(PID → account username)** captured at launch — no HTTP, no log-parsing. Every
+launch path (`launch_game`/`launch_home` workers and the auto-rejoin
+`_launch_and_track_pid`) snapshots Roblox PIDs before launch, and
+`_record_launched_account` uses `utils/pid_labels.pick_launched_pid` to identify
+the one new PID and record it. If `rename_roblox_windows` (default **on**) is set,
+`_rename_window_for_pid_when_ready` waits for that PID's window and sets its title
+to the account name. The sound tracker's `_resolve_pid_label` reads the same map,
+so sound events carry the correct account too. `_match_pids_to_accounts`
+(auto-rejoin "Start All") also writes the map; dead PIDs are dropped on
+disconnect. Only manager-launched instances are labeled. The old polling rename
+worker (`_rename_monitoring_worker`) was removed. Tests:
+`tests/test_pid_labels.py`.
+
 ## Sound-emission tracking
 
 Flags which Roblox instance emits sound. Pure logic lives in
@@ -219,10 +235,9 @@ on `pycaw` being installed) polls per-process WASAPI peak meters every
 `POLL_INTERVAL` (0.25 s), filters to Roblox game-client PIDs via the cached
 `_is_sound_pid`, and runs peaks through `SoundEdgeDetector` (fires once per
 silent→sound edge; `RELEASE_SECONDS` debounce + `COOLDOWN_SECONDS` rate limit).
-On an edge it resolves PID→username (memoized `_resolve_pid_label`, reusing
-`_get_user_id_from_pid` + `RobloxAPI.get_username_from_user_id`) and calls
-`_on_sound_event` — the single seam where notification delivery will later plug
-in. The QOL/Roblox settings section exposes a "Track Roblox Sound Emission"
+On an edge it labels the PID via `_resolve_pid_label` (reads the authoritative
+`pid_account_map` — see **Instance labeling** below) and calls `_on_sound_event`
+— the single seam where notification delivery will later plug in. The QOL/Roblox settings section exposes a "Track Roblox Sound Emission"
 toggle (disabled with a note when `pycaw` is missing). Tests:
 `tests/test_sound_tracker.py` (run `py -m pytest tests/ -v`). New dependency:
 `pycaw`.
