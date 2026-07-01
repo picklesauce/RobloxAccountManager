@@ -208,6 +208,25 @@ disabling Anti-AFK aborts an in-flight timed pass), while the manual button
 passes nothing so a one-shot pass always completes (the manual path must NOT be
 gated on `anti_afk_stop_event`, which stays *set* whenever the timer is off).
 
+## Sound-emission tracking
+
+Flags which Roblox instance emits sound. Pure logic lives in
+`utils/sound_tracker.py` (constants, `SoundEdgeDetector`, `filter_roblox_peaks`,
+and the guarded pycaw peak-reader `get_roblox_session_peaks`). A daemon worker in
+`utils/ui.py` (`_sound_monitoring_worker`, started/stopped by
+`start_/stop_sound_monitoring`, gated on the `sound_tracking_enabled` setting and
+on `pycaw` being installed) polls per-process WASAPI peak meters every
+`POLL_INTERVAL` (0.25 s), filters to Roblox game-client PIDs via the cached
+`_is_sound_pid`, and runs peaks through `SoundEdgeDetector` (fires once per
+silent→sound edge; `RELEASE_SECONDS` debounce + `COOLDOWN_SECONDS` rate limit).
+On an edge it resolves PID→username (memoized `_resolve_pid_label`, reusing
+`_get_user_id_from_pid` + `RobloxAPI.get_username_from_user_id`) and calls
+`_on_sound_event` — the single seam where notification delivery will later plug
+in. The QOL/Roblox settings section exposes a "Track Roblox Sound Emission"
+toggle (disabled with a note when `pycaw` is missing). Tests:
+`tests/test_sound_tracker.py` (run `py -m pytest tests/ -v`). New dependency:
+`pycaw`.
+
 ## Encryption
 
 Three modes selected at first run: Hardware (tied to machine), Password (portable),

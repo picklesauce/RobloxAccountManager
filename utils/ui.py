@@ -447,6 +447,9 @@ class AccountManagerUI:
         
         if hasattr(self, 'rename_stop_event'):
             self.stop_rename_monitoring()
+
+        if hasattr(self, 'sound_stop_event'):
+            self.stop_sound_monitoring()
         
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
@@ -6732,7 +6735,32 @@ del /f /q "%~f0"
             style="Dark.TCheckbutton",
             command=on_rename_toggle
         ).pack(anchor="w", pady=(0, 10))
-        
+
+        sound_var = tk.BooleanVar(value=self.settings.get("sound_tracking_enabled", False))
+
+        def on_sound_toggle():
+            enabled = sound_var.get()
+            self.settings["sound_tracking_enabled"] = enabled
+            self.save_settings()
+            if enabled:
+                self.start_sound_monitoring()
+            else:
+                self.stop_sound_monitoring()
+
+        sound_check_text = "Track Roblox Sound Emission"
+        if not sound_tracker.PYCAW_AVAILABLE:
+            sound_check_text += "  (pycaw not installed)"
+        sound_check = ttk.Checkbutton(
+            roblox_frame,
+            text=sound_check_text,
+            variable=sound_var,
+            style="Dark.TCheckbutton",
+            command=on_sound_toggle
+        )
+        if not sound_tracker.PYCAW_AVAILABLE:
+            sound_check.configure(state="disabled")
+        sound_check.pack(anchor="w", pady=(0, 10))
+
         anti_afk_btn = ttk.Button(
             roblox_frame,
             text="Anti-AFK",
@@ -6880,6 +6908,9 @@ del /f /q "%~f0"
 
         if self.settings.get("rename_roblox_windows", False):
             self.root.after(1000, self.start_rename_monitoring)
+
+        if self.settings.get("sound_tracking_enabled", False):
+            self.root.after(1000, self.start_sound_monitoring)
         
         if self.settings.get("active_instances_monitoring", False):
             self.root.after(1500, self.start_instances_monitoring)
