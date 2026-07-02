@@ -85,6 +85,26 @@ game the friend is in, not necessarily a configured `place_id`. The auto-rejoin
 worker accounts for this by forcing the "in any game" presence branch whenever
 `join_off_username` is set.
 
+### Main-window Mode dropdown (Place ID vs Join off Friend)
+The right-column **Mode** combobox (`join_mode_combo`, persisted as
+`last_join_mode`) switches what the primary Join button does:
+- **Place ID** → shows the Place ID field; left-click runs `launch_game()`
+  (API path, unchanged).
+- **Join off Friend** → shows a **Friend Username** field (persisted as
+  `last_join_off_username`) and disables the Private Server field; left-click
+  runs `launch_join_off_friend()`.
+
+`_apply_join_mode()` is the single source of truth for the mode's visual state
+(swaps the field frame in `join_field_container`, relabels the button, toggles
+the Private Server entry). `launch_join_off_friend()` mirrors `launch_game()`
+(multi-select aware, PID labeling via `_record_launched_account`, window
+arrangement for 2+), but resolves the friend, presence-checks them once using a
+selected account's cookie (the friend need not be a managed account), then per
+account calls `manager.launch_roblox_follow_user` (when `join_off_use_app`) or
+`manager.launch_roblox_profile_join` — the **same anti-captcha paths auto-rejoin
+uses**. This is distinct from the right-click dropdown's *Join User*, which is
+the captcha-prone API path.
+
 ### Launch Roblox Home dropdown
 The homepage "Launch Roblox Home  ▼" button opens a popup menu:
 - **Launch in App** → `launch_home()` (existing — API-path launch with `place_id=""`)
