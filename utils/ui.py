@@ -93,9 +93,9 @@ class AccountManagerUI:
         
         saved_pos = self.settings.get('main_window_position')
         if saved_pos:
-            self.root.geometry(f"450x520+{saved_pos['x']}+{saved_pos['y']}")
+            self.root.geometry(f"450x555+{saved_pos['x']}+{saved_pos['y']}")
         else:
-            self.root.geometry("450x520")
+            self.root.geometry("450x555")
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
@@ -213,6 +213,24 @@ class AccountManagerUI:
         style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
         style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
         style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[("readonly", self.BG_MID)],
+            foreground=[("readonly", self.FG_TEXT)],
+            selectbackground=[("readonly", self.BG_MID)],
+            selectforeground=[("readonly", self.FG_TEXT)],
+        )
 
         main_frame = ttk.Frame(self.root, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -296,11 +314,38 @@ class AccountManagerUI:
         self.game_name_label = ttk.Label(right_frame, text="", style="Dark.TLabel", font=("Segoe UI", 9))
         self.game_name_label.pack(anchor="w", pady=(0, 5))
         
-        ttk.Label(right_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.place_entry = ttk.Entry(right_frame, style="Dark.TEntry")
+        ttk.Label(right_frame, text="Mode", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.join_mode_var = tk.StringVar(
+            value=self.settings.get("last_join_mode", "Place ID")
+        )
+        self.join_mode_combo = ttk.Combobox(
+            right_frame,
+            textvariable=self.join_mode_var,
+            values=["Place ID", "Join off Friend"],
+            state="readonly",
+            style="Dark.TCombobox",
+        )
+        self.join_mode_combo.pack(fill="x", pady=(0, 5))
+        self.join_mode_combo.bind("<<ComboboxSelected>>", self._on_join_mode_change)
+
+        # Place ID and Friend Username share the same slot; _apply_join_mode
+        # packs exactly one of these frames at a time.
+        self.join_field_container = ttk.Frame(right_frame, style="Dark.TFrame")
+        self.join_field_container.pack(fill="x")
+
+        self.place_id_frame = ttk.Frame(self.join_field_container, style="Dark.TFrame")
+        ttk.Label(self.place_id_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.place_entry = ttk.Entry(self.place_id_frame, style="Dark.TEntry")
         self.place_entry.pack(fill="x", pady=(0, 5))
         self.place_entry.insert(0, self.settings.get("last_place_id", ""))
         self.place_entry.bind("<KeyRelease>", self.on_place_id_change)
+
+        self.friend_frame = ttk.Frame(self.join_field_container, style="Dark.TFrame")
+        ttk.Label(self.friend_frame, text="Friend Username", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.friend_entry = ttk.Entry(self.friend_frame, style="Dark.TEntry")
+        self.friend_entry.pack(fill="x", pady=(0, 5))
+        self.friend_entry.insert(0, self.settings.get("last_join_off_username", ""))
+        self.friend_entry.bind("<KeyRelease>", self.on_join_off_username_change)
 
         ttk.Label(right_frame, text="Private Server ID (Optional)", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
         self.private_server_entry = ttk.Entry(right_frame, style="Dark.TEntry")
@@ -318,7 +363,10 @@ class AccountManagerUI:
         self.join_place_split_btn.bind("<Button-3>", self.on_join_place_right_click)
         self.join_place_split_btn.bind("<Enter>", self.on_join_place_hover)
         self.join_place_split_btn.bind("<Leave>", self.on_join_place_leave)
-        
+
+        # Apply the persisted mode now that both fields and the button exist.
+        self._apply_join_mode()
+
         recent_games_header = ttk.Frame(right_frame, style="Dark.TFrame")
         recent_games_header.pack(fill="x", anchor="w", pady=(10, 2))
         
@@ -517,6 +565,24 @@ class AccountManagerUI:
         style.configure("TNotebook", background=self.BG_DARK, borderwidth=0)
         style.configure("TNotebook.Tab", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor="none")
         style.map("TNotebook.Tab", background=[("selected", self.BG_LIGHT)], focuscolor=[("!focus", "none")])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[("readonly", self.BG_MID)],
+            foreground=[("readonly", self.FG_TEXT)],
+            selectbackground=[("readonly", self.BG_MID)],
+            selectforeground=[("readonly", self.FG_TEXT)],
+        )
         style.configure(
             "ThemeEditor.TCombobox",
             fieldbackground=self.BG_MID,
@@ -899,6 +965,8 @@ class AccountManagerUI:
                 self.settings = {
                     "last_place_id": "",
                     "last_private_server": "",
+                    "last_join_mode": "Place ID",
+                    "last_join_off_username": "",
                     "game_list": [],
                     "favorite_games": [],
                     "enable_topmost": False,
@@ -931,6 +999,8 @@ class AccountManagerUI:
             self.settings = {
                 "last_place_id": "",
                 "last_private_server": "",
+                "last_join_mode": "Place ID",
+                "last_join_off_username": "",
                 "game_list": [],
                 "favorite_games": [],
                 "enable_topmost": False,
@@ -1405,7 +1475,10 @@ del /f /q "%~f0"
     
     def on_join_place_split_click(self, event):
         """Handle clicks on the button: left click launches game, right click shows dropdown."""
-        self.launch_game()
+        if self.join_mode_var.get() == "Join off Friend":
+            self.launch_join_off_friend()
+        else:
+            self.launch_game()
         return "break"
     
     def on_join_place_right_click(self, event):
@@ -2138,6 +2211,45 @@ del /f /q "%~f0"
         self.settings["last_place_id"] = place_id
         self.save_settings()
         self.update_game_name()
+
+    def on_join_off_username_change(self, event=None):
+        self.settings["last_join_off_username"] = self.friend_entry.get().strip()
+        self.save_settings()
+
+    def _on_join_mode_change(self, event=None):
+        """Persist the selected mode and refresh the field/button state."""
+        self.settings["last_join_mode"] = self.join_mode_var.get()
+        self.save_settings()
+        self._apply_join_mode()
+
+    def _apply_join_mode(self):
+        """Single source of truth for the join-mode UI state: shows the active
+        field (Place ID vs Friend Username), sets the button label, and enables
+        or disables the Private Server field (irrelevant when following a friend).
+        """
+        mode = self.join_mode_var.get()
+        friend_mode = (mode == "Join off Friend")
+
+        # Swap which field frame is visible in the shared slot.
+        self.place_id_frame.pack_forget()
+        self.friend_frame.pack_forget()
+        if friend_mode:
+            self.friend_frame.pack(fill="x")
+        else:
+            self.place_id_frame.pack(fill="x")
+
+        # Button label reflects the action.
+        self.join_place_split_btn.config(
+            text="Join off Friend" if friend_mode else "Join Place ID"
+        )
+
+        # Private Server only applies to the Place ID path.
+        try:
+            self.private_server_entry.config(
+                state="disabled" if friend_mode else "normal"
+            )
+        except Exception:
+            pass
 
     def on_private_server_change(self, event=None):        
         private_server = self.private_server_entry.get().strip()
@@ -4344,6 +4456,113 @@ del /f /q "%~f0"
             self.root.after(0, on_done)
 
         threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
+
+    def launch_join_off_friend(self):
+        """Launch the selected account(s) off a friend using the same
+        anti-captcha path as auto-rejoin (app-follow when join_off_use_app is
+        set, otherwise browser profile-join)."""
+
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+
+        friend = self.friend_entry.get().strip()
+        if not friend:
+            messagebox.showwarning("Missing Info", "Please enter a friend's username to join off.")
+            return
+
+        self.settings["last_join_off_username"] = friend
+        self.save_settings()
+
+        if self.settings.get("confirm_before_launch", False):
+            if len(usernames) == 1:
+                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join off {friend}?")
+            else:
+                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join off {friend} with {len(usernames)} accounts?")
+            if not confirm:
+                return
+
+        def worker(selected_usernames, target_user):
+            if 'user_id_cache' not in self.settings:
+                self.settings['user_id_cache'] = {}
+            user_id = RobloxAPI.get_user_id_from_username(
+                target_user, use_cache=True, cache_dict=self.settings['user_id_cache']
+            )
+            if not user_id:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"User '{target_user}' not found."
+                ))
+                return
+
+            # Check the friend is in a joinable game, using one of our own
+            # account's cookies (the friend need not be a managed account).
+            account_cookie = self.manager.accounts.get(selected_usernames[0])
+            if isinstance(account_cookie, dict):
+                account_cookie = account_cookie.get('cookie')
+            if not account_cookie:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", "Failed to get account cookie."
+                ))
+                return
+
+            presence = RobloxAPI.get_player_presence(user_id, account_cookie)
+            if not presence:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"Failed to get presence for '{target_user}'. Please try again."
+                ))
+                return
+            if not presence.get('in_game'):
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Not In Game",
+                    f"'{target_user}' is not currently in a game.\n\nStatus: {presence.get('last_location', 'Unknown')}"
+                ))
+                return
+
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+            use_app = self.settings.get("join_off_use_app", True)
+            success_count = 0
+            for uname in selected_usernames:
+                pids_before = self._get_roblox_pids()
+                try:
+                    if use_app:
+                        ok = self.manager.launch_roblox_follow_user(
+                            uname, target_user, launcher_pref, custom_launcher_path
+                        )
+                    else:
+                        ok = self.manager.launch_roblox_profile_join(
+                            uname, target_user, launcher_pref, custom_launcher_path
+                        )
+                    if ok:
+                        success_count += 1
+                        self._record_launched_account(uname, pids_before)
+                except Exception as e:
+                    print(f"[ERROR] Failed to join off {target_user} for {uname}: {e}")
+
+            if success_count > 1 and (self.settings.get("auto_tile_windows", False)
+                                      or self.settings.get("auto_minimize_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_launch, daemon=True).start()
+
+            def on_done():
+                if success_count > 0:
+                    self.settings["last_joined_user"] = selected_usernames[-1]
+                    self.save_settings()
+                    if not self.settings.get("disable_launch_popup", False):
+                        if len(selected_usernames) == 1:
+                            messagebox.showinfo("Success", f"Joining off '{target_user}'! Check your desktop.")
+                        else:
+                            messagebox.showinfo("Success", f"Joining off '{target_user}' with {success_count} account(s)! Check your desktop.")
+                else:
+                    messagebox.showerror("Error", "Failed to launch Roblox.")
+
+            self.root.after(0, on_done)
+
+        threading.Thread(target=worker, args=(usernames, friend), daemon=True).start()
 
     def open_auto_rejoin(self):
         """Open the auto-rejoin management window (like favorites window)"""
