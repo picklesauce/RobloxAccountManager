@@ -101,9 +101,12 @@ the Private Server entry). `launch_join_off_friend()` mirrors `launch_game()`
 arrangement for 2+), but resolves the friend, presence-checks them once using a
 selected account's cookie (the friend need not be a managed account), then per
 account calls `manager.launch_roblox_follow_user` (when `join_off_use_app`) or
-`manager.launch_roblox_profile_join` — the **same anti-captcha paths auto-rejoin
-uses**. This is distinct from the right-click dropdown's *Join User*, which is
-the captcha-prone API path.
+`manager.launch_roblox_profile_join` — the **same follow-user / profile-join
+paths auto-rejoin's join-off uses**. This differs from the right-click
+dropdown's *Join User* by launch **mechanism**: *Join User* reads the target's
+presence and joins their current game/job via the API path (`launch_roblox` →
+auth ticket), whereas *Join off Friend* uses the follow-user / profile-join
+paths.
 
 ### Launch Roblox Home dropdown
 The homepage "Launch Roblox Home  ▼" button opens a popup menu:
