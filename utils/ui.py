@@ -4458,9 +4458,9 @@ del /f /q "%~f0"
         threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
 
     def launch_join_off_friend(self):
-        """Launch the selected account(s) off a friend using the same
-        anti-captcha path as auto-rejoin (app-follow when join_off_use_app is
-        set, otherwise browser profile-join)."""
+        """Launch the selected account(s) off a friend using the same join-off
+        path as auto-rejoin (app-follow when join_off_use_app is set, otherwise
+        browser profile-join)."""
 
         if self.settings.get("enable_multi_select", False):
             usernames = self.get_selected_usernames()
