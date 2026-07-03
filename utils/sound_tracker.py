@@ -10,7 +10,7 @@ UI or audio hardware. The pycaw import is guarded (see PYCAW_AVAILABLE below).
 SOUND_THRESHOLD = 0.02      # peak (0.0-1.0) above this counts as "sound"
 POLL_INTERVAL = 0.25        # seconds between polls in the worker loop
 RELEASE_SECONDS = 1.5       # continuous silence needed to re-arm a PID
-COOLDOWN_SECONDS = 5.0      # minimum gap between events for one PID
+COOLDOWN_SECONDS = 100.0    # minimum gap between events for one PID (rate limit)
 
 
 def format_pid_label(pid, username):
