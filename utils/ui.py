@@ -47,6 +47,8 @@ from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
+from utils import sound_tracker
+from utils import pid_labels
 import websockets
 
 class AccountManagerUI:
@@ -91,9 +93,9 @@ class AccountManagerUI:
         
         saved_pos = self.settings.get('main_window_position')
         if saved_pos:
-            self.root.geometry(f"450x520+{saved_pos['x']}+{saved_pos['y']}")
+            self.root.geometry(f"450x555+{saved_pos['x']}+{saved_pos['y']}")
         else:
-            self.root.geometry("450x520")
+            self.root.geometry("450x555")
         self.root.configure(bg="#2b2b2b")
         self.root.resizable(False, False)
         
@@ -115,10 +117,18 @@ class AccountManagerUI:
         self.optimize_ram_stop_event = threading.Event()
         self.optimize_ram_seen_pids = set()
         
-        self.rename_thread = None
-        self.rename_stop_event = threading.Event()
-        self.renamed_pids = set()
-        
+        # Sound-emission tracking
+        self.sound_thread = None
+        self.sound_stop_event = threading.Event()
+        self.sound_detector = sound_tracker.SoundEdgeDetector()
+        self._sound_valid_pids = {}   # pid -> bool (is a real Roblox game client)
+
+        # Authoritative PID -> account username, captured at launch. Source of
+        # truth for window auto-rename and sound-event labels. Written by launch
+        # worker threads, read by the sound worker thread -> guard with the lock.
+        self.pid_account_map = {}
+        self.pid_account_lock = threading.Lock()
+
         self.instances_monitor_thread = None
         self.instances_monitor_stop = threading.Event()
         self.instances_data = []
@@ -203,6 +213,24 @@ class AccountManagerUI:
         style.configure("Dark.TEntry", fieldbackground=self.BG_MID, background=self.BG_MID, foreground=self.FG_TEXT)
         style.configure("Dark.TCheckbutton", background=self.BG_DARK, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, self.FONT_SIZE))
         style.map("Dark.TCheckbutton", background=[("active", self.BG_DARK)], foreground=[("active", self.FG_TEXT)])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[("readonly", self.BG_MID)],
+            foreground=[("readonly", self.FG_TEXT)],
+            selectbackground=[("readonly", self.BG_MID)],
+            selectforeground=[("readonly", self.FG_TEXT)],
+        )
 
         main_frame = ttk.Frame(self.root, style="Dark.TFrame")
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -286,11 +314,38 @@ class AccountManagerUI:
         self.game_name_label = ttk.Label(right_frame, text="", style="Dark.TLabel", font=("Segoe UI", 9))
         self.game_name_label.pack(anchor="w", pady=(0, 5))
         
-        ttk.Label(right_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        self.place_entry = ttk.Entry(right_frame, style="Dark.TEntry")
+        ttk.Label(right_frame, text="Mode", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.join_mode_var = tk.StringVar(
+            value=self.settings.get("last_join_mode", "Place ID")
+        )
+        self.join_mode_combo = ttk.Combobox(
+            right_frame,
+            textvariable=self.join_mode_var,
+            values=["Place ID", "Join off Friend"],
+            state="readonly",
+            style="Dark.TCombobox",
+        )
+        self.join_mode_combo.pack(fill="x", pady=(0, 5))
+        self.join_mode_combo.bind("<<ComboboxSelected>>", self._on_join_mode_change)
+
+        # Place ID and Friend Username share the same slot; _apply_join_mode
+        # packs exactly one of these frames at a time.
+        self.join_field_container = ttk.Frame(right_frame, style="Dark.TFrame")
+        self.join_field_container.pack(fill="x")
+
+        self.place_id_frame = ttk.Frame(self.join_field_container, style="Dark.TFrame")
+        ttk.Label(self.place_id_frame, text="Place ID", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.place_entry = ttk.Entry(self.place_id_frame, style="Dark.TEntry")
         self.place_entry.pack(fill="x", pady=(0, 5))
         self.place_entry.insert(0, self.settings.get("last_place_id", ""))
         self.place_entry.bind("<KeyRelease>", self.on_place_id_change)
+
+        self.friend_frame = ttk.Frame(self.join_field_container, style="Dark.TFrame")
+        ttk.Label(self.friend_frame, text="Friend Username", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self.friend_entry = ttk.Entry(self.friend_frame, style="Dark.TEntry")
+        self.friend_entry.pack(fill="x", pady=(0, 5))
+        self.friend_entry.insert(0, self.settings.get("last_join_off_username", ""))
+        self.friend_entry.bind("<KeyRelease>", self.on_join_off_username_change)
 
         ttk.Label(right_frame, text="Private Server ID (Optional)", style="Dark.TLabel", font=("Segoe UI", 9, "bold")).pack(anchor="w")
         self.private_server_entry = ttk.Entry(right_frame, style="Dark.TEntry")
@@ -308,7 +363,10 @@ class AccountManagerUI:
         self.join_place_split_btn.bind("<Button-3>", self.on_join_place_right_click)
         self.join_place_split_btn.bind("<Enter>", self.on_join_place_hover)
         self.join_place_split_btn.bind("<Leave>", self.on_join_place_leave)
-        
+
+        # Apply the persisted mode now that both fields and the button exist.
+        self._apply_join_mode()
+
         recent_games_header = ttk.Frame(right_frame, style="Dark.TFrame")
         recent_games_header.pack(fill="x", anchor="w", pady=(10, 2))
         
@@ -437,8 +495,8 @@ class AccountManagerUI:
         if hasattr(self, 'optimize_ram_stop_event'):
             self.stop_optimize_roblox_ram()
         
-        if hasattr(self, 'rename_stop_event'):
-            self.stop_rename_monitoring()
+        if hasattr(self, 'sound_stop_event'):
+            self.stop_sound_monitoring()
         
         if hasattr(self, 'auto_rejoin_threads'):
             self.stop_all_auto_rejoin()
@@ -507,6 +565,24 @@ class AccountManagerUI:
         style.configure("TNotebook", background=self.BG_DARK, borderwidth=0)
         style.configure("TNotebook.Tab", background=self.BG_MID, foreground=self.FG_TEXT, font=(self.FONT_FAMILY, max(8, self.FONT_SIZE - 1)), focuscolor="none")
         style.map("TNotebook.Tab", background=[("selected", self.BG_LIGHT)], focuscolor=[("!focus", "none")])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=self.BG_MID,
+            background=self.BG_MID,
+            foreground=self.FG_TEXT,
+            arrowcolor=self.FG_TEXT,
+            bordercolor=self.BG_LIGHT,
+            lightcolor=self.BG_LIGHT,
+            darkcolor=self.BG_LIGHT,
+            relief="flat",
+        )
+        style.map(
+            "Dark.TCombobox",
+            fieldbackground=[("readonly", self.BG_MID)],
+            foreground=[("readonly", self.FG_TEXT)],
+            selectbackground=[("readonly", self.BG_MID)],
+            selectforeground=[("readonly", self.FG_TEXT)],
+        )
         style.configure(
             "ThemeEditor.TCombobox",
             fieldbackground=self.BG_MID,
@@ -889,6 +965,8 @@ class AccountManagerUI:
                 self.settings = {
                     "last_place_id": "",
                     "last_private_server": "",
+                    "last_join_mode": "Place ID",
+                    "last_join_off_username": "",
                     "game_list": [],
                     "favorite_games": [],
                     "enable_topmost": False,
@@ -921,6 +999,8 @@ class AccountManagerUI:
             self.settings = {
                 "last_place_id": "",
                 "last_private_server": "",
+                "last_join_mode": "Place ID",
+                "last_join_off_username": "",
                 "game_list": [],
                 "favorite_games": [],
                 "enable_topmost": False,
@@ -1395,7 +1475,10 @@ del /f /q "%~f0"
     
     def on_join_place_split_click(self, event):
         """Handle clicks on the button: left click launches game, right click shows dropdown."""
-        self.launch_game()
+        if self.join_mode_var.get() == "Join off Friend":
+            self.launch_join_off_friend()
+        else:
+            self.launch_game()
         return "break"
     
     def on_join_place_right_click(self, event):
@@ -1568,6 +1651,7 @@ del /f /q "%~f0"
             "enable_ping": False,
             "ping_user_id": "",
             "ping_on_error": True,
+            "ping_on_sound": True,
             "log_everything": False,
             "log_errors": True,
             "log_success": True,
@@ -1575,6 +1659,7 @@ del /f /q "%~f0"
             "log_info": False,
             "log_auto_rejoin": True,
             "log_auto_rejoin_console": False,
+            "log_sound_events": True,
             "screenshot_interval_minutes": 60,
             "screenshot_enabled": False,
         }
@@ -2126,6 +2211,45 @@ del /f /q "%~f0"
         self.settings["last_place_id"] = place_id
         self.save_settings()
         self.update_game_name()
+
+    def on_join_off_username_change(self, event=None):
+        self.settings["last_join_off_username"] = self.friend_entry.get().strip()
+        self.save_settings()
+
+    def _on_join_mode_change(self, event=None):
+        """Persist the selected mode and refresh the field/button state."""
+        self.settings["last_join_mode"] = self.join_mode_var.get()
+        self.save_settings()
+        self._apply_join_mode()
+
+    def _apply_join_mode(self):
+        """Single source of truth for the join-mode UI state: shows the active
+        field (Place ID vs Friend Username), sets the button label, and enables
+        or disables the Private Server field (irrelevant when following a friend).
+        """
+        mode = self.join_mode_var.get()
+        friend_mode = (mode == "Join off Friend")
+
+        # Swap which field frame is visible in the shared slot.
+        self.place_id_frame.pack_forget()
+        self.friend_frame.pack_forget()
+        if friend_mode:
+            self.friend_frame.pack(fill="x")
+        else:
+            self.place_id_frame.pack(fill="x")
+
+        # Button label reflects the action.
+        self.join_place_split_btn.config(
+            text="Join off Friend" if friend_mode else "Join Place ID"
+        )
+
+        # Private Server only applies to the Place ID path.
+        try:
+            self.private_server_entry.config(
+                state="disabled" if friend_mode else "normal"
+            )
+        except Exception:
+            pass
 
     def on_private_server_change(self, event=None):        
         private_server = self.private_server_entry.get().strip()
@@ -4218,9 +4342,11 @@ del /f /q "%~f0"
             success_count = 0
             failed_launch = False
             for uname in selected_usernames:
+                pids_before = self._get_roblox_pids()
                 try:
                     if self.manager.launch_roblox(uname, "", "", launcher_pref, "", custom_launcher_path):
                         success_count += 1
+                        self._record_launched_account(uname, pids_before)
                     else:
                         failed_launch = True
                 except Exception as e:
@@ -4294,15 +4420,15 @@ del /f /q "%~f0"
             success_count = 0
             failed_launch = False
             for i, uname in enumerate(selected_usernames):
+                pids_before = self._get_roblox_pids()
                 try:
                     if self.manager.launch_roblox(uname, pid, psid, launcher_pref, "", custom_launcher_path):
                         success_count += 1
+                        self._record_launched_account(uname, pids_before)
                     else:
                         failed_launch = True
                 except Exception as e:
                     print(f"[ERROR] Failed to launch game for {uname}: {e}")
-                if i < len(selected_usernames) - 1:
-                    time.sleep(2)
             if failed_launch:
                 self._silent_check_cookies()
 
@@ -4330,6 +4456,113 @@ del /f /q "%~f0"
             self.root.after(0, on_done)
 
         threading.Thread(target=worker, args=(usernames, game_id, private_server), daemon=True).start()
+
+    def launch_join_off_friend(self):
+        """Launch the selected account(s) off a friend using the same join-off
+        path as auto-rejoin (app-follow when join_off_use_app is set, otherwise
+        browser profile-join)."""
+
+        if self.settings.get("enable_multi_select", False):
+            usernames = self.get_selected_usernames()
+            if not usernames:
+                return
+        else:
+            username = self.get_selected_username()
+            if not username:
+                return
+            usernames = [username]
+
+        friend = self.friend_entry.get().strip()
+        if not friend:
+            messagebox.showwarning("Missing Info", "Please enter a friend's username to join off.")
+            return
+
+        self.settings["last_join_off_username"] = friend
+        self.save_settings()
+
+        if self.settings.get("confirm_before_launch", False):
+            if len(usernames) == 1:
+                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join off {friend}?")
+            else:
+                confirm = messagebox.askyesno("Confirm Launch", f"Are you sure you want to join off {friend} with {len(usernames)} accounts?")
+            if not confirm:
+                return
+
+        def worker(selected_usernames, target_user):
+            if 'user_id_cache' not in self.settings:
+                self.settings['user_id_cache'] = {}
+            user_id = RobloxAPI.get_user_id_from_username(
+                target_user, use_cache=True, cache_dict=self.settings['user_id_cache']
+            )
+            if not user_id:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"User '{target_user}' not found."
+                ))
+                return
+
+            # Check the friend is in a joinable game, using one of our own
+            # account's cookies (the friend need not be a managed account).
+            account_cookie = self.manager.accounts.get(selected_usernames[0])
+            if isinstance(account_cookie, dict):
+                account_cookie = account_cookie.get('cookie')
+            if not account_cookie:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", "Failed to get account cookie."
+                ))
+                return
+
+            presence = RobloxAPI.get_player_presence(user_id, account_cookie)
+            if not presence:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"Failed to get presence for '{target_user}'. Please try again."
+                ))
+                return
+            if not presence.get('in_game'):
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Not In Game",
+                    f"'{target_user}' is not currently in a game.\n\nStatus: {presence.get('last_location', 'Unknown')}"
+                ))
+                return
+
+            launcher_pref, custom_launcher_path = self._get_roblox_launcher_config()
+            use_app = self.settings.get("join_off_use_app", True)
+            success_count = 0
+            for uname in selected_usernames:
+                pids_before = self._get_roblox_pids()
+                try:
+                    if use_app:
+                        ok = self.manager.launch_roblox_follow_user(
+                            uname, target_user, launcher_pref, custom_launcher_path
+                        )
+                    else:
+                        ok = self.manager.launch_roblox_profile_join(
+                            uname, target_user, launcher_pref, custom_launcher_path
+                        )
+                    if ok:
+                        success_count += 1
+                        self._record_launched_account(uname, pids_before)
+                except Exception as e:
+                    print(f"[ERROR] Failed to join off {target_user} for {uname}: {e}")
+
+            if success_count > 1 and (self.settings.get("auto_tile_windows", False)
+                                      or self.settings.get("auto_minimize_windows", False)):
+                threading.Thread(target=self._arrange_roblox_windows_after_launch, daemon=True).start()
+
+            def on_done():
+                if success_count > 0:
+                    self.settings["last_joined_user"] = selected_usernames[-1]
+                    self.save_settings()
+                    if not self.settings.get("disable_launch_popup", False):
+                        if len(selected_usernames) == 1:
+                            messagebox.showinfo("Success", f"Joining off '{target_user}'! Check your desktop.")
+                        else:
+                            messagebox.showinfo("Success", f"Joining off '{target_user}' with {success_count} account(s)! Check your desktop.")
+                else:
+                    messagebox.showerror("Error", "Failed to launch Roblox.")
+
+            self.root.after(0, on_done)
+
+        threading.Thread(target=worker, args=(usernames, friend), daemon=True).start()
 
     def open_auto_rejoin(self):
         """Open the auto-rejoin management window (like favorites window)"""
@@ -6705,26 +6938,47 @@ del /f /q "%~f0"
         )
         force_close_btn.pack(fill="x", pady=(0, 5))
         
-        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", False))
-        
+        rename_var = tk.BooleanVar(value=self.settings.get("rename_roblox_windows", True))
+
         def on_rename_toggle():
-            enabled = rename_var.get()
-            self.settings["rename_roblox_windows"] = enabled
+            # Rename now happens at launch; the toggle is just a stored preference
+            # read by the launch paths. Takes effect on the next launch.
+            self.settings["rename_roblox_windows"] = rename_var.get()
             self.save_settings()
-            
-            if enabled:
-                self.start_rename_monitoring()
-            else:
-                self.stop_rename_monitoring()
-        
+
         ttk.Checkbutton(
             roblox_frame,
-            text="Rename Roblox Windows",
+            text="Rename Roblox Windows (on launch)",
             variable=rename_var,
             style="Dark.TCheckbutton",
             command=on_rename_toggle
         ).pack(anchor="w", pady=(0, 10))
-        
+
+        sound_var = tk.BooleanVar(value=self.settings.get("sound_tracking_enabled", False))
+
+        def on_sound_toggle():
+            enabled = sound_var.get()
+            self.settings["sound_tracking_enabled"] = enabled
+            self.save_settings()
+            if enabled:
+                self.start_sound_monitoring()
+            else:
+                self.stop_sound_monitoring()
+
+        sound_check_text = "Track Roblox Sound Emission"
+        if not sound_tracker.PYCAW_AVAILABLE:
+            sound_check_text += "  (pycaw not installed)"
+        sound_check = ttk.Checkbutton(
+            roblox_frame,
+            text=sound_check_text,
+            variable=sound_var,
+            style="Dark.TCheckbutton",
+            command=on_sound_toggle
+        )
+        if not sound_tracker.PYCAW_AVAILABLE:
+            sound_check.configure(state="disabled")
+        sound_check.pack(anchor="w", pady=(0, 10))
+
         anti_afk_btn = ttk.Button(
             roblox_frame,
             text="Anti-AFK",
@@ -6870,8 +7124,8 @@ del /f /q "%~f0"
 
         optimize_ram_check.config(command=on_optimize_ram_toggle_wrapper)
 
-        if self.settings.get("rename_roblox_windows", False):
-            self.root.after(1000, self.start_rename_monitoring)
+        if self.settings.get("sound_tracking_enabled", False):
+            self.root.after(1000, self.start_sound_monitoring)
         
         if self.settings.get("active_instances_monitoring", False):
             self.root.after(1500, self.start_instances_monitoring)
@@ -7415,6 +7669,7 @@ del /f /q "%~f0"
         dc_ping_var = tk.BooleanVar(value=webhook_cfg.get("enable_ping", False))
         dc_ping_id_var = tk.StringVar(value=webhook_cfg.get("ping_user_id", ""))
         dc_ping_err_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_error", True))
+        dc_ping_sound_var = tk.BooleanVar(value=webhook_cfg.get("ping_on_sound", True))
         dc_log_all_var = tk.BooleanVar(value=webhook_cfg.get("log_everything", False))
         dc_log_err_var = tk.BooleanVar(value=webhook_cfg.get("log_errors", True))
         dc_log_ok_var = tk.BooleanVar(value=webhook_cfg.get("log_success", True))
@@ -7422,6 +7677,7 @@ del /f /q "%~f0"
         dc_log_info_var = tk.BooleanVar(value=webhook_cfg.get("log_info", False))
         dc_log_rejoin_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin", True))
         dc_log_rejoin_console_var = tk.BooleanVar(value=webhook_cfg.get("log_auto_rejoin_console", False))
+        dc_log_sound_var = tk.BooleanVar(value=webhook_cfg.get("log_sound_events", True))
         dc_screenshot_interval_var = tk.StringVar(value=str(webhook_cfg.get("screenshot_interval_minutes", 60)))
         dc_screenshot_enabled_var = tk.BooleanVar(value=webhook_cfg.get("screenshot_enabled", False))
 
@@ -7431,6 +7687,7 @@ del /f /q "%~f0"
             webhook_cfg["enable_ping"] = dc_ping_var.get()
             webhook_cfg["ping_user_id"] = dc_ping_id_var.get().strip()
             webhook_cfg["ping_on_error"] = dc_ping_err_var.get()
+            webhook_cfg["ping_on_sound"] = dc_ping_sound_var.get()
             webhook_cfg["log_everything"] = dc_log_all_var.get()
             webhook_cfg["log_errors"] = dc_log_err_var.get()
             webhook_cfg["log_success"] = dc_log_ok_var.get()
@@ -7438,6 +7695,7 @@ del /f /q "%~f0"
             webhook_cfg["log_info"] = dc_log_info_var.get()
             webhook_cfg["log_auto_rejoin"] = dc_log_rejoin_var.get()
             webhook_cfg["log_auto_rejoin_console"] = dc_log_rejoin_console_var.get()
+            webhook_cfg["log_sound_events"] = dc_log_sound_var.get()
             try:
                 webhook_cfg["screenshot_interval_minutes"] = max(1, int(dc_screenshot_interval_var.get()))
             except (ValueError, TypeError):
@@ -7502,6 +7760,13 @@ del /f /q "%~f0"
         ping_row2.pack(fill="x", pady=(2, 6))
         ttk.Checkbutton(
             ping_row2, text="Ping only on [ERROR]", variable=dc_ping_err_var,
+            style="Dark.TCheckbutton", command=_dc_save
+        ).pack(anchor="w", padx=(2, 0))
+
+        ping_row3 = ttk.Frame(dc_frame, style="Dark.TFrame")
+        ping_row3.pack(fill="x", pady=(0, 6))
+        ttk.Checkbutton(
+            ping_row3, text="Ping on sound event", variable=dc_ping_sound_var,
             style="Dark.TCheckbutton", command=_dc_save
         ).pack(anchor="w", padx=(2, 0))
 
@@ -7591,6 +7856,7 @@ del /f /q "%~f0"
                 _chk("Log [INFO]",                     dc_log_info_var),
                 _chk("Log Auto-Rejoin events",         dc_log_rejoin_var),
                 _chk("Log Auto-Rejoin console",        dc_log_rejoin_console_var),
+                _chk("Log Sound events",               dc_log_sound_var),
             ]
             _toggle_log_all()
 
@@ -9516,64 +9782,48 @@ del /f /q "%~f0"
             command=favorites_window.destroy
         ).pack(side="left", fill="x", expand=True, padx=(2, 0))
     
-    def start_rename_monitoring(self):
-        """Start monitoring and renaming Roblox windows"""
-        if self.rename_thread and self.rename_thread.is_alive():
-            return
-        
-        self.rename_stop_event.clear()
-        self.renamed_pids.clear()
-        self.rename_thread = threading.Thread(target=self._rename_monitoring_worker, daemon=True)
-        self.rename_thread.start()
-        print("[INFO] Rename monitoring started")
-    
-    def stop_rename_monitoring(self):
-        """Stop rename monitoring"""
-        if self.rename_thread:
-            self.rename_stop_event.set()
-            self.rename_thread = None
-            self.renamed_pids.clear()
-            print("[INFO] Rename monitoring stopped")
-    
-    def _rename_monitoring_worker(self):
-        """Monitor for new Roblox PIDs and renames them"""
-        while not self.rename_stop_event.is_set():
-            try:
-                current_pids = set()
-                for proc in psutil.process_iter(['pid', 'name']):
-                    try:
-                        if proc.info['name'] and proc.info['name'].lower() == 'robloxplayerbeta.exe':
-                            pid = proc.info['pid']
-                            if self._is_valid_roblox_game_client(pid, 'robloxplayerbeta.exe'):
-                                current_pids.add(pid)
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                new_pids = current_pids - self.renamed_pids
-                
-                for pid in new_pids:
-                    if self.rename_stop_event.is_set():
-                        break
-                    
-                    user_id, _ = self._get_user_id_from_pid(pid)
-                    
-                    if user_id:
-                        username = RobloxAPI.get_username_from_user_id(user_id)
-                        
-                        if username:
-                            self._rename_roblox_window(pid, username)
-                            self.renamed_pids.add(pid)
-                            print(f"[INFO] Renamed Roblox window for PID {pid} to '{username}'")
-                    
-                    time.sleep(0.5)
-                
-                self.renamed_pids = self.renamed_pids.intersection(current_pids)
-                
-            except Exception as e:
-                print(f"[ERROR] Error in rename monitoring: {e}")
-            
-            time.sleep(2)
-    
+    def _record_launched_account(self, account, pids_before, timeout=12):
+        """After launching `account`, find the new Roblox PID it produced and
+        record it authoritatively in pid_account_map. Renames its window
+        off-thread when enabled. Returns the PID, or None if none could be
+        unambiguously identified within `timeout` seconds.
+
+        Call this synchronously from a launch worker (it polls up to `timeout`),
+        so each account's PID is claimed before the next launch starts."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pids_after = self._get_roblox_pids()
+            with self.pid_account_lock:
+                assigned = set(self.pid_account_map)
+            new_pid = pid_labels.pick_launched_pid(pids_before, pids_after, assigned)
+            if new_pid is not None:
+                with self.pid_account_lock:
+                    self.pid_account_map[new_pid] = account
+                print(f"[Rename] Tracked {account} -> PID {new_pid}")
+                if self.settings.get("rename_roblox_windows", True):
+                    threading.Thread(
+                        target=self._rename_window_for_pid_when_ready,
+                        args=(new_pid, account),
+                        daemon=True
+                    ).start()
+                return new_pid
+            time.sleep(0.5)
+        print(f"[Rename] Could not identify a new PID for {account} within {timeout}s")
+        return None
+
+    def _rename_window_for_pid_when_ready(self, pid, name, timeout=45):
+        """Wait for the window owned by `pid` to appear, then set its title to
+        `name`. Mirrors _minimize_roblox_window_for_pid's polling. Daemon thread
+        only — never call while holding a launch lock."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._get_roblox_hwnds_from_pids({pid}):
+                self._rename_roblox_window(pid, name)
+                print(f"[Rename] Renamed window for PID {pid} -> '{name}'")
+                return
+            time.sleep(1)
+        print(f"[Rename] Window for PID {pid} never appeared within {timeout}s; not renamed")
+
     def _rename_roblox_window(self, pid, username):
         """Rename a Roblox window by PID"""
         try:
@@ -9590,7 +9840,101 @@ del /f /q "%~f0"
             win32gui.EnumWindows(enum_windows_callback, pid)
         except Exception as e:
             print(f"[ERROR] Failed to rename window for PID {pid}: {e}")
-    
+
+    def start_sound_monitoring(self):
+        """Start monitoring which Roblox instance emits sound."""
+        if not sound_tracker.PYCAW_AVAILABLE:
+            print("[Sound] pycaw not installed; sound tracking disabled")
+            return
+        if self.sound_thread and self.sound_thread.is_alive():
+            return
+        self.sound_stop_event.clear()
+        self.sound_detector = sound_tracker.SoundEdgeDetector()
+        self._sound_valid_pids.clear()
+        self.sound_thread = threading.Thread(
+            target=self._sound_monitoring_worker, daemon=True)
+        self.sound_thread.start()
+        print("[Sound] Sound monitoring started")
+
+    def stop_sound_monitoring(self):
+        """Stop sound monitoring."""
+        if self.sound_thread:
+            self.sound_stop_event.set()
+            self.sound_thread = None
+            self._sound_valid_pids.clear()
+            print("[Sound] Sound monitoring stopped")
+
+    def _is_sound_pid(self, pid, name):
+        """Cached check: is this PID a real Roblox game client?"""
+        cached = self._sound_valid_pids.get(pid)
+        if cached is not None:
+            return cached
+        valid = self._is_valid_roblox_game_client(pid, name)
+        self._sound_valid_pids[pid] = valid
+        return valid
+
+    def _resolve_pid_label(self, pid):
+        """PID -> account name from the authoritative launch map; 'PID <n>' on miss.
+        No HTTP or log-parsing: labels come only from capture-at-launch."""
+        with self.pid_account_lock:
+            account = self.pid_account_map.get(pid)
+        if account:
+            return account
+        return sound_tracker.format_pid_label(pid, None)
+
+    def _on_sound_event(self, pid, label, peak):
+        """Single sink for detected sound: console log + optional Discord webhook."""
+        print(f"[Sound] {label} (PID {pid}) emitted sound (peak={peak:.3f})")
+        try:
+            cfg = self.settings.get("discord_webhook", {})
+            url = str(cfg.get("url", "") or "").strip()
+            if not (cfg.get("enabled") and url):
+                return
+            if not (cfg.get("log_everything") or cfg.get("log_sound_events", True)):
+                return
+            ping_id = None
+            if cfg.get("enable_ping") and cfg.get("ping_on_sound", True):
+                ping_id = str(cfg.get("ping_user_id", "") or "").strip() or None
+            self._send_webhook_embed(
+                url,
+                "🔊 Instance Emitting Sound",
+                f"**{label}** (PID `{pid}`) started emitting audio.\nPeak level: `{peak:.3f}`",
+                0xE67E22,
+                ping_user_id=ping_id,
+            )
+        except Exception as e:
+            print(f"[Sound] Failed to send sound webhook: {e}")
+
+    def _sound_monitoring_worker(self):
+        """Poll per-process peaks; flag Roblox instances on silent->sound edges."""
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            comtypes = None
+        try:
+            while not self.sound_stop_event.is_set():
+                try:
+                    peaks = sound_tracker.get_roblox_session_peaks(self._is_sound_pid)
+                    now = time.time()
+                    for pid, peak in peaks.items():
+                        if self.sound_detector.update(pid, peak, now):
+                            label = self._resolve_pid_label(pid)
+                            self._on_sound_event(pid, label, peak)
+                    live = set(peaks.keys())
+                    self.sound_detector.prune(live)
+                    self._sound_valid_pids = {
+                        p: v for p, v in self._sound_valid_pids.items() if p in live}
+                except Exception as e:
+                    print(f"[Sound] Error in sound monitoring: {e}")
+                self.sound_stop_event.wait(sound_tracker.POLL_INTERVAL)
+        finally:
+            if comtypes is not None:
+                try:
+                    comtypes.CoUninitialize()
+                except Exception:
+                    pass
+
     def start_anti_afk(self):
         """Start the Anti-AFK background thread"""
         if self.anti_afk_thread and self.anti_afk_thread.is_alive():
@@ -10405,6 +10749,8 @@ del /f /q "%~f0"
                         except Exception as e:
                             print(f"[Auto-Rejoin] [{account}] Error closing instance (PID: {old_pid}): {e}")
                         del self.auto_rejoin_pids[account]
+                        with self.pid_account_lock:
+                            self.pid_account_map.pop(old_pid, None)
 
                     rejoin_job_id = job_id if job_id else (game_id if game_id else '')
                     success = self._launch_and_track_pid(account, place_id, private_server, rejoin_job_id)
@@ -10550,6 +10896,14 @@ del /f /q "%~f0"
             if available_pids:
                 new_pid = max(available_pids)
                 self.auto_rejoin_pids[account] = new_pid
+                with self.pid_account_lock:
+                    self.pid_account_map[new_pid] = account
+                if self.settings.get("rename_roblox_windows", True):
+                    threading.Thread(
+                        target=self._rename_window_for_pid_when_ready,
+                        args=(new_pid, account),
+                        daemon=True
+                    ).start()
                 print(f"[Auto-Rejoin] [{account}] Successfully tracked PID {new_pid}")
                 # Minimize the freshly (re)launched window if the user enabled it.
                 # Targets only this PID's window so other instances are untouched,
@@ -10677,6 +11031,8 @@ del /f /q "%~f0"
                 if account_user_id == pid_user_id:
                     matches[account] = pid
                     self.auto_rejoin_pids[account] = pid
+                    with self.pid_account_lock:
+                        self.pid_account_map[pid] = account
                     print(f"[Auto-Rejoin] MATCHED: {account} (user {account_user_id}) -> PID {pid}")
                     del pid_user_ids[pid]
                     break
