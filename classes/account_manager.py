@@ -26,6 +26,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from .encryption import HardwareEncryption, PasswordEncryption, EncryptionConfig
 from .roblox_api import RobloxAPI
+from utils.proxy import build_auth_extension_files
 
 
 class RobloxAccountManager:
@@ -59,6 +60,7 @@ class RobloxAccountManager:
         
         self.accounts = self.load_accounts()
         self.temp_profile_dir = None
+        self.temp_extension_dirs = []
         
     def load_accounts(self):
         """Load saved accounts from JSON file"""
@@ -151,23 +153,72 @@ class RobloxAccountManager:
         return self.temp_profile_dir
     
     def cleanup_temp_profile(self):
-        """Clean up temporary profile directory"""
+        """Clean up temporary profile + proxy-extension directories"""
         if self.temp_profile_dir and os.path.exists(self.temp_profile_dir):
             try:
                 shutil.rmtree(self.temp_profile_dir)
             except:
                 pass
+        for ext_dir in self.temp_extension_dirs:
+            if ext_dir and os.path.exists(ext_dir):
+                try:
+                    shutil.rmtree(ext_dir)
+                except:
+                    pass
+        self.temp_extension_dirs = []
+
+    def _build_proxy_auth_extension(self, scheme, host, port, username, password):
+        """Write a throwaway MV2 extension that supplies proxy credentials.
+
+        Returns the extension directory path, or None on failure. The dir is
+        tracked in self.temp_extension_dirs and removed by cleanup_temp_profile.
+        NOTE: relies on MV2 blocking webRequest auth; verify against the bundled
+        Chromium version before shipping (see plan Task 4 live check).
+        """
+        try:
+            manifest, background = build_auth_extension_files(
+                scheme, host, port, username, password
+            )
+            ext_dir = tempfile.mkdtemp(prefix="ram_proxy_ext_")
+            with open(os.path.join(ext_dir, "manifest.json"), "w", encoding="utf-8") as f:
+                f.write(manifest)
+            with open(os.path.join(ext_dir, "background.js"), "w", encoding="utf-8") as f:
+                f.write(background)
+            return ext_dir
+        except Exception as e:
+            print(f"[ERROR] Failed to build proxy auth extension: {e}")
+            return None
     
-    def setup_chrome_driver(self, browser_path=None):
+    def setup_chrome_driver(self, browser_path=None, proxy=None):
         print(f"[INFO] setup_chrome_driver called with browser_path: {browser_path}")
         profile_dir = self.create_temp_profile()
 
-        
+
         chrome_options = Options()
-        
+
         if browser_path:
             chrome_options.binary_location = browser_path
-        
+
+        # --- Proxy support (Add Account only) -------------------------------
+        proxy_ext_dir = None
+        if proxy:
+            scheme = proxy.get("scheme") or "http"
+            host = proxy.get("host")
+            port = proxy.get("port")
+            username = proxy.get("username")
+            password = proxy.get("password")
+            if username:
+                # Credentials can't ride on --proxy-server, so load a throwaway
+                # extension that answers onAuthRequired with them.
+                proxy_ext_dir = self._build_proxy_auth_extension(
+                    scheme, host, port, username, password or ""
+                )
+                if proxy_ext_dir:
+                    self.temp_extension_dirs.append(proxy_ext_dir)
+            else:
+                chrome_options.add_argument(f"--proxy-server={scheme}://{host}:{port}")
+            print(f"[INFO] Add Account routing through proxy {host}:{port}")
+
         chrome_options.add_argument(f"--user-data-dir={profile_dir}")
         chrome_options.add_argument("--no-first-run")
         chrome_options.add_argument("--no-default-browser-check")
@@ -186,7 +237,11 @@ class RobloxAccountManager:
         chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
-        chrome_options.add_argument("--disable-extensions")
+        if proxy_ext_dir:
+            chrome_options.add_argument(f"--load-extension={proxy_ext_dir}")
+            chrome_options.add_argument(f"--disable-extensions-except={proxy_ext_dir}")
+        else:
+            chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-plugins")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--no-sandbox")
@@ -461,13 +516,15 @@ class RobloxAccountManager:
             print(f"[ERROR] Error extracting user info: {e}")
             return None, None, None, None
     
-    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None):
+    def add_account(self, amount=1, website="https://www.roblox.com/login", javascript="", browser_path=None, proxies=None):
         """
         Add accounts through browser login with optional Javascript execution
         amount: number of browser instances to open (max 10)
         website: URL to navigate to
         javascript: Javascript code to execute after page load
         browser_path: Optional path to browser executable
+        proxies: None (direct), a single parsed-proxy dict, or a list of dicts
+                 (one per instance) to route each login through a proxy.
         """
         if amount > 10:
             print("[WARNING] The maximum instance is only 10. Setting to 10.")
@@ -480,7 +537,13 @@ class RobloxAccountManager:
             print(f"[INFO] Launching {amount} browser instance(s)...")
             
             for i in range(amount):
-                driver = self.setup_chrome_driver(browser_path)
+                instance_proxy = None
+                if isinstance(proxies, list):
+                    if i < len(proxies):
+                        instance_proxy = proxies[i]
+                elif isinstance(proxies, dict):
+                    instance_proxy = proxies
+                driver = self.setup_chrome_driver(browser_path, proxy=instance_proxy)
                 if not driver:
                     print(f"[ERROR] Failed to setup Chrome driver for instance {i + 1}")
                     continue
