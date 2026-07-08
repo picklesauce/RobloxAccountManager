@@ -8422,19 +8422,38 @@ del /f /q "%~f0"
             status_label.config(text="Testing first proxy…", fg=self.FG_TEXT)
 
             def _run():
+                rp = to_requests_proxies(proxy)
+                # Primary check: HTTPS (what Add Account uses; needs a CONNECT tunnel).
                 try:
                     resp = requests.get(
-                        "https://api.ipify.org?format=json",
-                        proxies=to_requests_proxies(proxy), timeout=12
+                        "https://api.ipify.org?format=json", proxies=rp, timeout=15
                     )
-                    ip = resp.json().get("ip", "?")
-                    self.root.after(0, lambda: status_label.config(
-                        text=f"OK — exit IP {ip}  (via {proxy['host']}:{proxy['port']})",
-                        fg="#00CC66"))
+                    if resp.status_code == 200:
+                        ip = resp.json().get("ip", "?")
+                        self.root.after(0, lambda: status_label.config(
+                            text=f"OK — exit IP {ip}  (via {proxy['host']}:{proxy['port']})",
+                            fg="#00CC66"))
+                        return
+                    https_msg = f"proxy returned HTTP {resp.status_code}"
                 except Exception as exc:
-                    msg = str(exc)
-                    self.root.after(0, lambda: status_label.config(
-                        text=f"Failed: {msg[:70]}", fg="#FF6666"))
+                    https_msg = str(exc)
+
+                # HTTPS failed — probe over plain HTTP to surface the proxy's real
+                # reason (free proxies often reply e.g. 402 "Bandwidth limit reached").
+                try:
+                    r2 = requests.get("http://api.ipify.org", proxies=rp, timeout=15)
+                    if r2.status_code == 200:
+                        detail = ("reachable over HTTP but the HTTPS tunnel (CONNECT) was "
+                                  "refused — the proxy may block port 443, or retry (free "
+                                  "proxies rate-limit intermittently)")
+                    else:
+                        body = " ".join(r2.text.split())[:80]
+                        detail = f"proxy said HTTP {r2.status_code}: {body}"
+                except Exception:
+                    detail = https_msg[:90]
+
+                self.root.after(0, lambda d=detail: status_label.config(
+                    text=f"Failed on {proxy['host']} — {d}", fg="#FF6666"))
 
             threading.Thread(target=_run, daemon=True).start()
 
