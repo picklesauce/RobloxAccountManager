@@ -47,6 +47,7 @@ from classes.roblox_api import RobloxAPI
 from classes.account_manager import RobloxAccountManager
 from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
+from utils.proxy import parse_proxy_list, take_proxies, to_requests_proxies
 import websockets
 
 class AccountManagerUI:
@@ -913,6 +914,9 @@ class AccountManagerUI:
                     "websocket_port": 8765,
                     "websocket_require_password": False,
                     "developer_mode": False,
+                    "proxy_enabled": False,
+                    "proxy_list": [],
+                    "proxy_rotation_index": 0,
                 }
         except:
             self.settings = {
@@ -945,6 +949,9 @@ class AccountManagerUI:
                 "websocket_port": 8765,
                 "websocket_require_password": False,
                 "developer_mode": False,
+                "proxy_enabled": False,
+                "proxy_list": [],
+                "proxy_rotation_index": 0,
             }
 
         settings_migrated = self._ensure_discord_settings_defaults()
@@ -3262,6 +3269,22 @@ del /f /q "%~f0"
                     seen.add(username)
         return usernames
 
+    def _take_proxies(self, n):
+        """Return n parsed proxies for a launch batch, or None if proxying is off.
+
+        Advances and persists the round-robin cursor. None => direct connection.
+        """
+        if not self.settings.get("proxy_enabled", False):
+            return None
+        parsed = parse_proxy_list(self.settings.get("proxy_list", []))
+        if not parsed:
+            return None
+        start = int(self.settings.get("proxy_rotation_index", 0) or 0)
+        chosen, new_index = take_proxies(parsed, start, n)
+        self.settings["proxy_rotation_index"] = new_index
+        self.save_settings()
+        return chosen
+
     def add_account(self):
         """
         Add a new account using browser automation
@@ -3285,7 +3308,9 @@ del /f /q "%~f0"
             Thread function to add account without blocking UI
             """
             try:
-                success = self.manager.add_account(1, "https://www.roblox.com/login", "", browser_path)
+                proxies = self._take_proxies(1)
+                proxy = proxies[0] if proxies else None
+                success = self.manager.add_account(1, "https://www.roblox.com/login", "", browser_path, proxies=proxy)
                 self.root.after(0, lambda: self._add_account_complete(success))
             except Exception as e:
                 self.root.after(0, lambda: self._add_account_error(str(e)))
@@ -3669,8 +3694,9 @@ del /f /q "%~f0"
 
         def launch_thread():
             try:
-                success = self.manager.add_account(amount, website, javascript, browser_path)
-                
+                proxies = self._take_proxies(amount)
+                success = self.manager.add_account(amount, website, javascript, browser_path, proxies=proxies)
+
                 if success:
                     self.root.after(0, lambda: [
                         self.refresh_accounts(),
@@ -7807,7 +7833,14 @@ del /f /q "%~f0"
             style="Dark.TButton",
             command=self.open_browser_engine_window
         ).pack(fill="x", pady=(0, 5))
-        
+
+        ttk.Button(
+            tool_frame,
+            text="Proxy Settings",
+            style="Dark.TButton",
+            command=self.open_proxy_settings_window
+        ).pack(fill="x", pady=(0, 5))
+
         ttk.Button(
             tool_frame,
             text="Roblox Settings",
@@ -8302,6 +8335,118 @@ del /f /q "%~f0"
                 font=(self.FONT_FAMILY, 10)
             ).pack(pady=20)
     
+    def open_proxy_settings_window(self):
+        """Configure a rotating proxy list for Add Account logins."""
+        win = tk.Toplevel(self.root)
+        self.apply_window_icon(win)
+        win.title("Proxy Settings")
+        win.geometry("500x470")
+        win.configure(bg=self.BG_DARK)
+        win.resizable(False, False)
+        win.transient(self.root)
+        if self.settings.get("enable_topmost", False):
+            win.attributes("-topmost", True)
+        win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win.winfo_height() // 2)
+        win.geometry(f"+{x}+{y}")
+
+        container = ttk.Frame(win, style="Dark.TFrame")
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ttk.Label(
+            container, text="Add Account Proxy",
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 11, "bold")
+        ).pack(anchor="w")
+        ttk.Label(
+            container,
+            text=("Route Add Account logins through a rotating proxy list to spread\n"
+                  "logins across IPs. This changes the IP, not the browser fingerprint\n"
+                  "— it helps captchas but is not a guaranteed fix."),
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 8)
+        ).pack(anchor="w", pady=(2, 10))
+
+        sep = ttk.Frame(container, style="Dark.TFrame", height=1)
+        sep.pack(fill="x", pady=(0, 12))
+        sep.configure(relief="solid", borderwidth=1)
+
+        enabled_var = tk.BooleanVar(value=self.settings.get("proxy_enabled", False))
+        ttk.Checkbutton(
+            container, text="Route Add Account logins through a proxy",
+            style="Dark.TCheckbutton", variable=enabled_var
+        ).pack(anchor="w", pady=(0, 10))
+
+        ttk.Label(
+            container, text="Proxies (one per line):",
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 9)
+        ).pack(anchor="w")
+        ttk.Label(
+            container,
+            text="host:port    host:port:user:pass    user:pass@host:port    scheme://user:pass@host:port",
+            style="Dark.TLabel", font=(self.FONT_FAMILY, 7)
+        ).pack(anchor="w", pady=(0, 4))
+
+        text_frame = tk.Frame(container, bg=self.BG_MID, highlightthickness=1, highlightbackground="#555555")
+        text_frame.pack(fill="both", expand=True)
+        proxy_text = tk.Text(
+            text_frame, height=8, bg=self.BG_MID, fg=self.FG_TEXT,
+            insertbackground=self.FG_TEXT, relief="flat", font=("Consolas", 9), wrap="none"
+        )
+        proxy_text.pack(fill="both", expand=True, padx=4, pady=4)
+        existing = self.settings.get("proxy_list", [])
+        if isinstance(existing, list):
+            proxy_text.insert("1.0", "\n".join(existing))
+
+        status_label = tk.Label(
+            container, text="", bg=self.BG_DARK, fg=self.FG_TEXT,
+            font=(self.FONT_FAMILY, 8), anchor="w", justify="left"
+        )
+        status_label.pack(anchor="w", fill="x", pady=(8, 4))
+
+        def _current_list():
+            raw = proxy_text.get("1.0", "end-1c")
+            return [ln.strip() for ln in raw.splitlines() if ln.strip()]
+
+        def _save():
+            self.settings["proxy_enabled"] = enabled_var.get()
+            self.settings["proxy_list"] = _current_list()
+            self.save_settings()
+            status_label.config(text="Saved.", fg="#00CC66")
+
+        def _test():
+            parsed = parse_proxy_list(_current_list())
+            if not parsed:
+                status_label.config(text="No valid proxy to test.", fg="#FF6666")
+                return
+            proxy = parsed[0]
+            status_label.config(text="Testing first proxy…", fg=self.FG_TEXT)
+
+            def _run():
+                try:
+                    resp = requests.get(
+                        "https://api.ipify.org?format=json",
+                        proxies=to_requests_proxies(proxy), timeout=12
+                    )
+                    ip = resp.json().get("ip", "?")
+                    self.root.after(0, lambda: status_label.config(
+                        text=f"OK — exit IP {ip}  (via {proxy['host']}:{proxy['port']})",
+                        fg="#00CC66"))
+                except Exception as exc:
+                    msg = str(exc)
+                    self.root.after(0, lambda: status_label.config(
+                        text=f"Failed: {msg[:70]}", fg="#FF6666"))
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        btn_frame = ttk.Frame(container, style="Dark.TFrame")
+        btn_frame.pack(fill="x", pady=(4, 0))
+        ttk.Button(
+            btn_frame, text="Test First Proxy", style="Dark.TButton", command=_test
+        ).pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ttk.Button(
+            btn_frame, text="Save", style="Dark.TButton", command=_save
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
     def open_browser_engine_window(self):
         """Open Browser Engine selection window"""
         browser_window = tk.Toplevel(self.root)
