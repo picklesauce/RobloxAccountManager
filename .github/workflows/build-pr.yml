@@ -58,10 +58,23 @@ jobs:
             --collect-all=autoit \
             main.py
 
+      - name: Compute artifact name
+        id: artifact
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            label="PR${{ github.event.pull_request.number }}"
+          else
+            # Artifact names may not contain '/', so slugify the branch name
+            # (e.g. feat/qol-batch -> feat-qol-batch).
+            label="${GITHUB_REF_NAME//\//-}"
+          fi
+          echo "name=RobloxAccountManager-${label}-run${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RobloxAccountManager-${{ github.event_name == 'pull_request' && format('PR{0}', github.event.pull_request.number) || github.ref_name }}-run${{ github.run_number }}
+          name: ${{ steps.artifact.outputs.name }}
           path: dist/RobloxAccountManager.exe
           retention-days: 14
 

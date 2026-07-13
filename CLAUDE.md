@@ -85,6 +85,29 @@ game the friend is in, not necessarily a configured `place_id`. The auto-rejoin
 worker accounts for this by forcing the "in any game" presence branch whenever
 `join_off_username` is set.
 
+### Main-window Mode dropdown (Place ID vs Join off Friend)
+The right-column **Mode** combobox (`join_mode_combo`, persisted as
+`last_join_mode`) switches what the primary Join button does:
+- **Place ID** → shows the Place ID field; left-click runs `launch_game()`
+  (API path, unchanged).
+- **Join off Friend** → shows a **Friend Username** field (persisted as
+  `last_join_off_username`) and disables the Private Server field; left-click
+  runs `launch_join_off_friend()`.
+
+`_apply_join_mode()` is the single source of truth for the mode's visual state
+(swaps the field frame in `join_field_container`, relabels the button, toggles
+the Private Server entry). `launch_join_off_friend()` mirrors `launch_game()`
+(multi-select aware, PID labeling via `_record_launched_account`, window
+arrangement for 2+), but resolves the friend, presence-checks them once using a
+selected account's cookie (the friend need not be a managed account), then per
+account calls `manager.launch_roblox_follow_user` (when `join_off_use_app`) or
+`manager.launch_roblox_profile_join` — the **same follow-user / profile-join
+paths auto-rejoin's join-off uses**. This differs from the right-click
+dropdown's *Join User* by launch **mechanism**: *Join User* reads the target's
+presence and joins their current game/job via the API path (`launch_roblox` →
+auth ticket), whereas *Join off Friend* uses the follow-user / profile-join
+paths.
+
 ### Launch Roblox Home dropdown
 The homepage "Launch Roblox Home  ▼" button opens a popup menu:
 - **Launch in App** → `launch_home()` (existing — API-path launch with `place_id=""`)
@@ -207,6 +230,19 @@ mid-pass cancellation: the timer passes `anti_afk_stop_event.is_set` (so
 disabling Anti-AFK aborts an in-flight timed pass), while the manual button
 passes nothing so a one-shot pass always completes (the manual path must NOT be
 gated on `anti_afk_stop_event`, which stays *set* whenever the timer is off).
+## Instance labeling (auto-rename)
+
+Roblox instances are labeled from an **authoritative `pid_account_map`
+(PID → account username)** captured at launch — no HTTP, no log-parsing. Every
+launch path (`launch_game`/`launch_home` workers and the auto-rejoin
+`_launch_and_track_pid`) snapshots Roblox PIDs before launch, and
+`_record_launched_account` uses `utils/pid_labels.pick_launched_pid` to identify
+the one new PID and record it. If `rename_roblox_windows` (default **on**) is set,
+`_rename_window_for_pid_when_ready` waits for that PID's window and sets its title
+to the account name. `_match_pids_to_accounts` (auto-rejoin "Start All") also
+writes the map; dead PIDs are dropped on disconnect. Only manager-launched
+instances are labeled. The old polling rename worker (`_rename_monitoring_worker`)
+was removed. Tests: `tests/test_pid_labels.py`.
 
 ## Encryption
 
