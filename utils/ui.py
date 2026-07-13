@@ -49,6 +49,7 @@ from utils.encryption_setup import EncryptionSetupUI
 from utils.theme_manager import ThemeManager
 from utils.proxy import parse_proxy_list, take_proxies, to_requests_proxies
 from utils import pid_labels
+from utils.account_sort import sort_account_names
 import websockets
 
 class AccountManagerUI:
@@ -236,6 +237,13 @@ class AccountManagerUI:
         header_frame.pack(fill="x", anchor="w")
         
         ttk.Label(header_frame, text="Account List", style="Dark.TLabel").pack(side="left")
+
+        ttk.Button(
+            header_frame,
+            text="Sort A–Z",
+            style="Dark.TButton",
+            command=self.sort_accounts_alphabetically,
+        ).pack(side="left", padx=(8, 0))
         
         encryption_status = ""
         encryption_color = self.FG_TEXT
@@ -2676,6 +2684,37 @@ del /f /q "%~f0"
             dot.create_oval(0, 0, 7, 7, fill=dot_color, outline=dot_outline)
             dot.place(x=4, y=y + max(0, (height - 8) // 2))
             self._active_instance_indicators[username] = dot
+
+    def sort_accounts_alphabetically(self):
+        """Reorder the account list alphabetically on demand.
+
+        Uses the letters-then-digits natural ordering from utils.account_sort
+        (so user2 < user10, 001 < 0010). Sorts the master account dict *and*
+        each group's members, persists the new order, then repaints. This is an
+        explicit button action — it never runs on its own, so it doesn't fight
+        the manual drag-to-reorder feature.
+        """
+        try:
+            ordered = sort_account_names(self.manager.accounts.keys())
+            if list(self.manager.accounts.keys()) != ordered:
+                self.manager.accounts = {
+                    u: self.manager.accounts[u] for u in ordered
+                }
+                self.manager.save_accounts()
+
+            groups = self._get_groups()
+            groups_changed = False
+            for gname, members in list(groups.items()):
+                sorted_members = sort_account_names(members)
+                if sorted_members != members:
+                    groups[gname] = sorted_members
+                    groups_changed = True
+            if groups_changed:
+                self._save_groups(groups)
+
+            self.refresh_accounts()
+        except Exception as e:
+            print(f"[sort] failed to sort accounts alphabetically: {e}")
 
     def refresh_accounts(self):
         """Refresh the account list"""
