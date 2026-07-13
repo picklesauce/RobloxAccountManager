@@ -50,6 +50,7 @@ from utils.theme_manager import ThemeManager
 from utils.proxy import parse_proxy_list, take_proxies, to_requests_proxies
 from utils import pid_labels
 from utils.account_sort import sort_account_names
+from utils.log_filter import should_forward_log
 import websockets
 
 class AccountManagerUI:
@@ -2936,8 +2937,13 @@ del /f /q "%~f0"
         try:
             if not self._webhook_enabled():
                 return
-            url = str(self._get_webhook_cfg().get("url", "") or "").strip()
+            cfg = self._get_webhook_cfg()
+            url = str(cfg.get("url", "") or "").strip()
             if not url:
+                return
+            # Honor the Log Filters checkboxes + the substring blocklist.
+            # Forwarding is opt-in: an unchecked category is never sent.
+            if not should_forward_log(message, cfg, self.settings.get("console_filters")):
                 return
             self._send_webhook_embed(url, "Log", f"```{message}```", 0x5865F2)
         except Exception:
